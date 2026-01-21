@@ -1,0 +1,3 @@
+[submodule "deps/libxev"]
+	path = deps/libxev
+	url = https://github.com/mitchellh/libxev.git
