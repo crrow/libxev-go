@@ -1,0 +1,20 @@
+[book]
+title = "libxev-go"
+authors = ["crrow"]
+description = "Documentation for libxev-go"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "ayu"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/crrow/libxev-go"
+edit-url-template = "https://github.com/crrow/libxev-go/edit/main/docs/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[preprocessor]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
