@@ -2,23 +2,29 @@
 
 ## Overview
 
-Go wrapper for libxev, providing both low-level CGO bindings and idiomatic Go API.
+Go wrapper for libxev using **purego** (no CGO), providing both low-level bindings and idiomatic Go API.
+
+## Why purego?
+
+- **No CGO**: Faster builds, simpler cross-compilation, no C toolchain required
+- **Pure Go**: Single binary distribution (with embedded or bundled dylib)
+- **Callback support**: purego's `NewCallback` handles C→Go callbacks
 
 ## Scope (v1)
 
 - Loop + Timer only (minimal set to validate architecture)
-- Static linking with `libxev.a`
+- Dynamic linking with `libxev.dylib` / `libxev.so`
 
 ## Package Structure
 
 ```
 libxev-go/
 ├── pkg/
-│   ├── cxev/           # Low-level CGO bindings (public)
-│   │   ├── cxev.go     # CGO directives + C types mapping
+│   ├── cxev/           # Low-level purego bindings (public)
+│   │   ├── cxev.go     # Library loading + type definitions
 │   │   ├── loop.go     # xev_loop_* function bindings
 │   │   ├── timer.go    # xev_timer_* function bindings
-│   │   └── callback.go # Callback mechanism (export + userdata management)
+│   │   └── callback.go # Callback registry + purego.NewCallback
 │   │
 │   └── xev/            # High-level Idiomatic Go API (public)
 │       ├── loop.go     # Loop type wrapper
@@ -32,63 +38,178 @@ libxev-go/
 
 ## Low-level API: `pkg/cxev/`
 
-### CGO Configuration
+### Library Loading
 
 ```go
-/*
-#cgo CFLAGS: -I${SRCDIR}/../../deps/libxev/include
-#cgo LDFLAGS: -L${SRCDIR}/../../deps/libxev/zig-out/lib -lxev
-#include <xev.h>
-*/
-import "C"
+package cxev
+
+import (
+    "sync"
+    "unsafe"
+    "github.com/ebitengine/purego"
+)
+
+var (
+    libxev  uintptr
+    loadErr error
+    once    sync.Once
+)
+
+func init() {
+    once.Do(func() {
+        // Platform-specific library name
+        libxev, loadErr = purego.Dlopen(libPath(), purego.RTLD_NOW|purego.RTLD_GLOBAL)
+        if loadErr != nil {
+            return
+        }
+        registerFunctions()
+    })
+}
+
+func libPath() string {
+    // darwin: libxev.dylib, linux: libxev.so
+    // Can be overridden via LIBXEV_PATH env var
+}
 ```
 
 ### Type Mappings
 
 ```go
-type Loop C.xev_loop
-type Completion C.xev_completion
-type Watcher C.xev_watcher
-
-type RunMode C.xev_run_mode_t
+// Opaque types - sized byte arrays matching C struct sizes
 const (
-    RunNoWait    RunMode = C.XEV_RUN_NO_WAIT
-    RunOnce      RunMode = C.XEV_RUN_ONCE
-    RunUntilDone RunMode = C.XEV_RUN_UNTIL_DONE
+    SizeofLoop       = 512
+    SizeofCompletion = 320
+    SizeofWatcher    = 256
 )
 
-type CbAction C.xev_cb_action
+type Loop [SizeofLoop]byte
+type Completion [SizeofCompletion]byte
+type Watcher [SizeofWatcher]byte
+
+type RunMode int32
 const (
-    Disarm CbAction = C.XEV_DISARM
-    Rearm  CbAction = C.XEV_REARM
+    RunNoWait    RunMode = 0
+    RunOnce      RunMode = 1
+    RunUntilDone RunMode = 2
+)
+
+type CbAction int32
+const (
+    Disarm CbAction = 0
+    Rearm  CbAction = 1
 )
 ```
 
 ### Function Bindings
 
 ```go
-// Loop
-func LoopInit(loop *Loop) error
-func LoopDeinit(loop *Loop)
-func LoopRun(loop *Loop, mode RunMode) error
-func LoopNow(loop *Loop) int64
+var (
+    // Loop functions
+    xev_loop_init   func(loop unsafe.Pointer) int32
+    xev_loop_deinit func(loop unsafe.Pointer)
+    xev_loop_run    func(loop unsafe.Pointer, mode int32) int32
+    xev_loop_now    func(loop unsafe.Pointer) int64
 
-// Timer
-func TimerInit(watcher *Watcher) error
-func TimerDeinit(watcher *Watcher)
-func TimerRun(watcher *Watcher, loop *Loop, c *Completion, delayMs uint64, userdata unsafe.Pointer, cb TimerCallback)
+    // Timer functions  
+    xev_timer_init   func(w unsafe.Pointer) int32
+    xev_timer_deinit func(w unsafe.Pointer)
+    xev_timer_run    func(w, loop, c unsafe.Pointer, nextMs uint64, userdata, cb uintptr)
+)
+
+func registerFunctions() {
+    purego.RegisterLibFunc(&xev_loop_init, libxev, "xev_loop_init")
+    purego.RegisterLibFunc(&xev_loop_deinit, libxev, "xev_loop_deinit")
+    purego.RegisterLibFunc(&xev_loop_run, libxev, "xev_loop_run")
+    purego.RegisterLibFunc(&xev_loop_now, libxev, "xev_loop_now")
+    
+    purego.RegisterLibFunc(&xev_timer_init, libxev, "xev_timer_init")
+    purego.RegisterLibFunc(&xev_timer_deinit, libxev, "xev_timer_deinit")
+    purego.RegisterLibFunc(&xev_timer_run, libxev, "xev_timer_run")
+}
+
+// Public wrappers
+func LoopInit(loop *Loop) error {
+    if ret := xev_loop_init(unsafe.Pointer(loop)); ret != 0 {
+        return fmt.Errorf("xev_loop_init failed: %d", ret)
+    }
+    return nil
+}
+
+func LoopDeinit(loop *Loop)              { xev_loop_deinit(unsafe.Pointer(loop)) }
+func LoopRun(loop *Loop, mode RunMode) error {
+    if ret := xev_loop_run(unsafe.Pointer(loop), int32(mode)); ret != 0 {
+        return fmt.Errorf("xev_loop_run failed: %d", ret)
+    }
+    return nil
+}
+func LoopNow(loop *Loop) int64           { return xev_loop_now(unsafe.Pointer(loop)) }
+
+func TimerInit(w *Watcher) error {
+    if ret := xev_timer_init(unsafe.Pointer(w)); ret != 0 {
+        return fmt.Errorf("xev_timer_init failed: %d", ret)
+    }
+    return nil
+}
+func TimerDeinit(w *Watcher)             { xev_timer_deinit(unsafe.Pointer(w)) }
 ```
 
 ### Callback Mechanism
 
 ```go
-type TimerCallback func(loop *Loop, c *Completion, result int, userdata unsafe.Pointer) CbAction
+// C callback signature: xev_cb_action (*)(xev_loop*, xev_completion*, int, void*)
+type TimerCallback func(loop *Loop, c *Completion, result int32, userdata uintptr) CbAction
 
-var callbackRegistry sync.Map  // uintptr -> TimerCallback
+var (
+    callbackRegistry sync.Map  // callbackID -> TimerCallback
+    callbackCounter  uint64
+    
+    // Single global callback trampoline (created once)
+    timerCallbackPtr uintptr
+)
 
-//export goTimerCallback
-func goTimerCallback(l *C.xev_loop, c *C.xev_completion, result C.int, userdata unsafe.Pointer) C.xev_cb_action {
-    // Lookup and invoke Go callback from registry
+func init() {
+    // Create the C-callable trampoline once
+    timerCallbackPtr = purego.NewCallback(timerTrampoline)
+}
+
+// timerTrampoline is called from C, dispatches to registered Go callback
+func timerTrampoline(loop, completion unsafe.Pointer, result int32, userdata uintptr) int32 {
+    if cb, ok := callbackRegistry.Load(userdata); ok {
+        action := cb.(TimerCallback)(
+            (*Loop)(loop),
+            (*Completion)(completion),
+            result,
+            userdata,
+        )
+        return int32(action)
+    }
+    return int32(Disarm)
+}
+
+// RegisterCallback stores a Go callback and returns an ID to pass as userdata
+func RegisterCallback(cb TimerCallback) uintptr {
+    id := uintptr(atomic.AddUint64(&callbackCounter, 1))
+    callbackRegistry.Store(id, cb)
+    return id
+}
+
+// UnregisterCallback removes a callback from the registry
+func UnregisterCallback(id uintptr) {
+    callbackRegistry.Delete(id)
+}
+
+// TimerRun starts a timer with the given callback
+func TimerRun(w *Watcher, loop *Loop, c *Completion, delayMs uint64, cb TimerCallback) uintptr {
+    id := RegisterCallback(cb)
+    xev_timer_run(
+        unsafe.Pointer(w),
+        unsafe.Pointer(loop),
+        unsafe.Pointer(c),
+        delayMs,
+        id,                // userdata = callback ID
+        timerCallbackPtr,  // C function pointer
+    )
+    return id
 }
 ```
 
@@ -122,7 +243,11 @@ const (
     Continue                // Maps to Rearm
 )
 
-type Timer struct { ... }
+type Timer struct {
+    watcher    cxev.Watcher
+    completion cxev.Completion
+    callbackID uintptr  // For cleanup
+}
 
 func NewTimer() (*Timer, error)
 func (t *Timer) Close()
@@ -202,14 +327,52 @@ func main() {
     cxev.TimerInit(&watcher)
     defer cxev.TimerDeinit(&watcher)
 
-    cxev.TimerRun(&watcher, &loop, &completion, 5000, nil, myCallback)
+    id := cxev.TimerRun(&watcher, &loop, &completion, 5000, func(l *cxev.Loop, c *cxev.Completion, result int32, userdata uintptr) cxev.CbAction {
+        fmt.Println("Timer fired!")
+        return cxev.Disarm
+    })
+    defer cxev.UnregisterCallback(id)
+    
     cxev.LoopRun(&loop, cxev.RunUntilDone)
 }
 ```
+
+## Library Loading Strategy
+
+### Default Search Order
+
+1. `LIBXEV_PATH` environment variable (if set)
+2. Executable directory (`./libxev.dylib`)
+3. System library paths
+
+### Platform-specific Paths
+
+```go
+func libPath() string {
+    if p := os.Getenv("LIBXEV_PATH"); p != "" {
+        return p
+    }
+    
+    switch runtime.GOOS {
+    case "darwin":
+        return "libxev.dylib"
+    case "linux":
+        return "libxev.so"
+    case "windows":
+        return "xev.dll"
+    default:
+        panic("unsupported platform")
+    }
+}
+```
+
+### Embedding (Optional Future)
+
+For single-binary distribution, could embed dylib using `//go:embed` and extract at runtime (similar to modernc.org/sqlite approach).
 
 ## Future Extensions
 
 - Async watcher (`xev_async_*`)
 - ThreadPool (`xev_threadpool_*`)
-- Cross-platform build tags
-- Dynamic linking option
+- Embedded dylib option
+- Pre-built binaries for common platforms
