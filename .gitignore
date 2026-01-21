@@ -56,5 +56,10 @@ public/
 # Zig
 .zig-cache
 zig-out
+
+# Native libraries (built from deps/)
+*.dylib
+*.so
+*.dll
 # Added by goreleaser init:
 dist/

@@ -6,6 +6,7 @@ set dotenv-load := true
 # ========================================================================================
 
 GO := env("GO", "go")
+ZIG := env("ZIG", "zig")
 GOLANGCI_LINT := env("GOLANGCI_LINT", "golangci-lint")
 HAWKEYE := env("HAWKEYE", "hawkeye")
 GOSEC := env("GOSEC", "gosec")
@@ -15,6 +16,10 @@ GOIMPORTS := env("GOIMPORTS", "goimports")
 BIN_DIR := env("BIN_DIR", "bin")
 MODULE_NAME := env("MODULE_NAME", "github.com/crrow/libxev-go")
 DOCS_PORT := env("DOCS_PORT", "7070")
+
+# Platform-specific library name
+LIBXEV_NAME := if os() == "macos" { "libxev.dylib" } else if os() == "windows" { "xev.dll" } else { "libxev.so" }
+LIBXEV_PATH := justfile_directory() / "deps/libxev/zig-out/lib" / LIBXEV_NAME
 
 # Version information (for build-time injection)
 # Try to get version from git tag first, fallback to version.go
@@ -47,6 +52,39 @@ version:
     @echo "Git Tag:    {{ GIT_TAG }}"
     @echo "Git Commit: {{ GIT_COMMIT }}"
     @echo "Build Time: {{ BUILD_TIME }}"
+
+# ========================================================================================
+# Build
+# ========================================================================================
+
+[doc("build libxev native library")]
+[group("Build")]
+build-libxev:
+    @echo "Building libxev..."
+    cd deps/libxev && {{ ZIG }} build -Doptimize=ReleaseFast
+    @echo "Done: {{ LIBXEV_PATH }}"
+
+[doc("clean libxev build artifacts")]
+[group("Build")]
+clean-libxev:
+    @echo "Cleaning libxev build artifacts..."
+    rm -rf deps/libxev/zig-out deps/libxev/.zig-cache
+    @echo "Done!"
+
+[doc("build Go packages")]
+[group("Build")]
+build: build-libxev
+    @echo "Building Go packages..."
+    {{ GO }} build ./...
+    @echo "Done!"
+
+[doc("clean all build artifacts")]
+[group("Build")]
+clean: clean-libxev
+    @echo "Cleaning Go build artifacts..."
+    {{ GO }} clean ./...
+    rm -rf {{ BIN_DIR }}
+    @echo "Done!"
 
 [doc("update version.go based on latest git tag")]
 [group("Help")]
@@ -134,9 +172,17 @@ alias c := check
 
 [doc("run unit tests only")]
 [group("Testing")]
-test:
+test: build-libxev
     @echo "Running unit tests..."
-    {{ GO }} list ./... | grep -v '/tests/' | xargs {{ GO }} test -count=1 -v -race -cover
+    LIBXEV_PATH={{ LIBXEV_PATH }} {{ GO }} test -count=1 -v -race -cover ./...
+    @echo "Done: Unit tests passed!"
+
+[doc("run unit tests (skip libxev build if already built)")]
+[group("Testing")]
+test-quick:
+    @echo "Running unit tests (quick)..."
+    @test -f {{ LIBXEV_PATH }} || just build-libxev
+    LIBXEV_PATH={{ LIBXEV_PATH }} {{ GO }} test -count=1 -v -race -cover ./...
     @echo "Done: Unit tests passed!"
 
 # ========================================================================================
