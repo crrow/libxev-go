@@ -4,7 +4,7 @@
 
 module concurrent_copy
 
-go 1.25
+go 1.23
 
 require (
 	github.com/charmbracelet/bubbles v0.21.0

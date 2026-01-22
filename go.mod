@@ -4,7 +4,7 @@
 
 module github.com/crrow/libxev-go
 
-go 1.25
+go 1.23
 
 require github.com/jupiterrider/ffi v0.5.1
 
