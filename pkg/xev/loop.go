@@ -50,12 +50,46 @@ import (
 	"github.com/crrow/libxev-go/pkg/cxev"
 )
 
-// Loop wraps the libxev event loop with a Go-friendly API.
+// Loop is the central event loop that drives all I/O operations.
+//
+// A Loop manages a set of watchers (timers, sockets, files) and dispatches
+// events to their registered callbacks. All operations are non-blocking and
+// driven by the underlying OS event notification mechanism (kqueue on macOS,
+// io_uring on Linux).
+//
+// # Thread Safety
+//
+// A Loop is NOT thread-safe. All operations on a Loop and its associated
+// watchers must be performed from the same goroutine. For cross-goroutine
+// communication, use channels or the Async watcher (not yet implemented).
+//
+// # Lifecycle
+//
+// Create a Loop with [NewLoop] or [NewLoopWithThreadPool], use it to register
+// watchers and run events, then call [Loop.Close] when done:
+//
+//	loop, err := xev.NewLoop()
+//	if err != nil {
+//	    return err
+//	}
+//	defer loop.Close()
+//
+//	// Register watchers...
+//	loop.Run()
 type Loop struct {
-	inner cxev.Loop
+	inner      cxev.Loop
+	threadPool cxev.ThreadPool
+	hasPool    bool
 }
 
-// NewLoop creates and initializes a new event loop.
+// NewLoop creates a new event loop.
+//
+// This creates a basic event loop suitable for timers, network I/O, and
+// other async operations that don't require blocking syscalls.
+//
+// For file I/O operations (which may block), use [NewLoopWithThreadPool] instead.
+//
+// Returns an error if the underlying OS event mechanism cannot be initialized.
 func NewLoop() (*Loop, error) {
 	l := &Loop{}
 	if err := cxev.LoopInit(&l.inner); err != nil {
@@ -64,10 +98,52 @@ func NewLoop() (*Loop, error) {
 	return l, nil
 }
 
-// Close releases resources associated with the loop.
-// Must be called when done with the loop.
+// NewLoopWithThreadPool creates an event loop with an integrated thread pool.
+//
+// The thread pool is required for file I/O operations, which may block and
+// cannot be efficiently multiplexed by kernel event mechanisms. The thread
+// pool offloads blocking operations to worker threads, delivering completion
+// events back to the event loop.
+//
+// Use this constructor when you need [File] operations. For pure network I/O
+// or timers, [NewLoop] is sufficient and has lower overhead.
+//
+// Example:
+//
+//	loop, err := xev.NewLoopWithThreadPool()
+//	if err != nil {
+//	    return err
+//	}
+//	defer loop.Close()
+//
+//	file, err := xev.OpenFile("data.txt", os.O_RDONLY, 0)
+//	if err != nil {
+//	    return err
+//	}
+//	// Use file with async operations...
+func NewLoopWithThreadPool() (*Loop, error) {
+	l := &Loop{hasPool: true}
+	if err := cxev.LoopInit(&l.inner); err != nil {
+		return nil, err
+	}
+	cxev.ThreadPoolInit(&l.threadPool, nil)
+	cxev.LoopSetThreadPool(&l.inner, &l.threadPool)
+	return l, nil
+}
+
+// Close releases all resources associated with the event loop.
+//
+// This must be called when the loop is no longer needed to avoid resource
+// leaks. If the loop was created with [NewLoopWithThreadPool], this also
+// shuts down and cleans up the thread pool.
+//
+// After Close is called, the Loop must not be used.
 func (l *Loop) Close() {
 	cxev.LoopDeinit(&l.inner)
+	if l.hasPool {
+		cxev.ThreadPoolShutdown(&l.threadPool)
+		cxev.ThreadPoolDeinit(&l.threadPool)
+	}
 }
 
 // Run processes events until all watchers are removed.
