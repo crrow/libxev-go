@@ -15,6 +15,9 @@
 headerPath = "LICENSE_HEADER"
 
 excludes = [
+    # Submodules
+    "deps/**",
+
     # Plain text files AS IS
     "*.txt",
     "*.md",
