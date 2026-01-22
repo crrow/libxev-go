@@ -1,0 +1,58 @@
+# MIT License
+# Copyright (c) 2023 Mitchell Hashimoto
+# Copyright (c) 2026 Crrow
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.24"
+  ZIG_VERSION: "0.14.0"
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Build native libraries
+        run: |
+          cd deps/libxev && zig build -Doptimize=ReleaseFast
+          cd ../../zig && zig build -Doptimize=ReleaseFast
+
+      - name: Run tests before release
+        env:
+          LIBXEV_PATH: ${{ github.workspace }}/deps/libxev/zig-out/lib/libxev.so
+          LIBXEV_EXT_PATH: ${{ github.workspace }}/zig/zig-out/lib/libxev_extended.so
+        run: go test -v -race ./...
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

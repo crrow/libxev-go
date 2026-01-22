@@ -1,0 +1,60 @@
+# MIT License
+# Copyright (c) 2023 Mitchell Hashimoto
+# Copyright (c) 2026 Crrow
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - gocritic
+    - nilerr
+    - errorlint
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+      - path: examples/
+        linters:
+          - errcheck
+          - gocritic
+      - path: cmd/
+        linters: [all]
+      - path: pkg/xev/(tcp|udp)\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/crrow/libxev-go
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - whyNoLint
+      - hugeParam
+      - exitAfterDefer
