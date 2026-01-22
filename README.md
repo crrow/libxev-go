@@ -87,7 +87,7 @@ just example-concurrent-copy
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.25+
 - [Zig](https://ziglang.org/) 0.15.1+ (for building libxev)
 
 ## License
