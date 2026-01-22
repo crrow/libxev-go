@@ -90,6 +90,10 @@ func registerFunctions() error {
 	return registerTimerFunctions()
 }
 
+func registerExtendedFunctions() error {
+	return registerThreadPoolFunctions()
+}
+
 // LoopInit initializes an event loop.
 //
 // # FFI Call Pattern

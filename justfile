@@ -21,6 +21,10 @@ DOCS_PORT := env("DOCS_PORT", "7070")
 LIBXEV_NAME := if os() == "macos" { "libxev.dylib" } else if os() == "windows" { "xev.dll" } else { "libxev.so" }
 LIBXEV_PATH := justfile_directory() / "deps/libxev/zig-out/lib" / LIBXEV_NAME
 
+# Extended library (TCP API) - platform-specific name
+LIBXEV_EXT_NAME := if os() == "macos" { "libxev_extended.dylib" } else if os() == "windows" { "xev_extended.dll" } else { "libxev_extended.so" }
+LIBXEV_EXT_PATH := justfile_directory() / "zig/zig-out/lib" / LIBXEV_EXT_NAME
+
 # Version information (for build-time injection)
 # Try to get version from git tag first, fallback to version.go
 GIT_TAG := trim(`git describe --tags --exact-match 2>/dev/null || echo ""`)
@@ -64,6 +68,18 @@ build-libxev:
     cd deps/libxev && {{ ZIG }} build -Doptimize=ReleaseFast
     @echo "Done: {{ LIBXEV_PATH }}"
 
+[doc("build extended C API library (TCP support)")]
+[group("Build")]
+build-extended:
+    @echo "Building extended C API (TCP)..."
+    cd zig && {{ ZIG }} build -Doptimize=ReleaseFast
+    @echo "Done: {{ LIBXEV_EXT_PATH }}"
+
+[doc("build all native libraries")]
+[group("Build")]
+build-all-native: build-libxev build-extended
+    @echo "Done: All native libraries built!"
+
 [doc("clean libxev build artifacts")]
 [group("Build")]
 clean-libxev:
@@ -71,16 +87,23 @@ clean-libxev:
     rm -rf deps/libxev/zig-out deps/libxev/.zig-cache
     @echo "Done!"
 
+[doc("clean extended library build artifacts")]
+[group("Build")]
+clean-extended:
+    @echo "Cleaning extended library build artifacts..."
+    rm -rf zig/zig-out zig/.zig-cache
+    @echo "Done!"
+
 [doc("build Go packages")]
 [group("Build")]
-build: build-libxev
+build: build-all-native
     @echo "Building Go packages..."
     {{ GO }} build ./...
     @echo "Done!"
 
 [doc("clean all build artifacts")]
 [group("Build")]
-clean: clean-libxev
+clean: clean-libxev clean-extended
     @echo "Cleaning Go build artifacts..."
     {{ GO }} clean ./...
     rm -rf {{ BIN_DIR }}
@@ -172,18 +195,26 @@ alias c := check
 
 [doc("run unit tests only")]
 [group("Testing")]
-test: build-libxev
+test: build-all-native
     @echo "Running unit tests..."
-    LIBXEV_PATH={{ LIBXEV_PATH }} {{ GO }} test -count=1 -v -race -cover ./...
+    LIBXEV_PATH={{ LIBXEV_PATH }} LIBXEV_EXT_PATH={{ LIBXEV_EXT_PATH }} {{ GO }} test -count=1 -v -race -cover ./...
     @echo "Done: Unit tests passed!"
 
-[doc("run unit tests (skip libxev build if already built)")]
+[doc("run unit tests (skip native build if already built)")]
 [group("Testing")]
 test-quick:
     @echo "Running unit tests (quick)..."
     @test -f {{ LIBXEV_PATH }} || just build-libxev
-    LIBXEV_PATH={{ LIBXEV_PATH }} {{ GO }} test -count=1 -v -race -cover ./...
+    @test -f {{ LIBXEV_EXT_PATH }} || just build-extended
+    LIBXEV_PATH={{ LIBXEV_PATH }} LIBXEV_EXT_PATH={{ LIBXEV_EXT_PATH }} {{ GO }} test -count=1 -v -race -cover ./...
     @echo "Done: Unit tests passed!"
+
+[doc("run extended library Zig tests")]
+[group("Testing")]
+test-zig:
+    @echo "Running extended library Zig tests..."
+    cd zig && {{ ZIG }} build test
+    @echo "Done: Zig tests passed!"
 
 # ========================================================================================
 # License Management

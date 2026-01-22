@@ -163,7 +163,8 @@ const (
 // Package-level state for library loading.
 // The library is loaded once on package init and the result is cached.
 var (
-	lib     ffi.Lib // Handle to the loaded shared library
+	lib     ffi.Lib // Handle to the loaded libxev shared library
+	libExt  ffi.Lib // Handle to the extended API library (TCP, etc.)
 	loadErr error   // Error from loading, nil if successful
 	once    sync.Once
 )
@@ -183,6 +184,31 @@ func init() {
 			return
 		}
 		loadErr = registerFunctions()
+		if loadErr != nil {
+			return
+		}
+
+		// Load extended library (TCP, File support) if available
+		extPath := libExtPath()
+		if extPath != "" {
+			libExt, loadErr = ffi.Load(extPath)
+			if loadErr != nil {
+				return
+			}
+			loadErr = registerTCPFunctions()
+			if loadErr != nil {
+				return
+			}
+			loadErr = registerFileFunctions()
+			if loadErr != nil {
+				return
+			}
+			loadErr = registerUDPFunctions()
+			if loadErr != nil {
+				return
+			}
+			loadErr = registerExtendedFunctions()
+		}
 	})
 }
 
@@ -222,6 +248,38 @@ func libName() string {
 		return "xev.dll"
 	default:
 		return "libxev.so"
+	}
+}
+
+// libExtPath returns the path to the extended API library (TCP support).
+// Returns empty string if not available.
+func libExtPath() string {
+	if p := os.Getenv("LIBXEV_EXT_PATH"); p != "" {
+		return p
+	}
+
+	exe, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(exe)
+		candidate := filepath.Join(dir, libExtName())
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
+func libExtName() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "libxev_extended.dylib"
+	case "linux":
+		return "libxev_extended.so"
+	case "windows":
+		return "xev_extended.dll"
+	default:
+		return "libxev_extended.so"
 	}
 }
 
