@@ -4,8 +4,8 @@
 
 module github.com/crrow/libxev-go
 
-go 1.24
+go 1.25
 
 require github.com/jupiterrider/ffi v0.5.1
 
-require github.com/ebitengine/purego v0.8.4 // indirect
+require github.com/ebitengine/purego v0.9.1 // indirect

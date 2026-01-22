@@ -63,3 +63,6 @@ zig-out
 *.dll
 # Added by goreleaser init:
 dist/
+
+# Example binaries
+/concurrent_copy
