@@ -1,5 +1,6 @@
 /*
  * MIT License
+ * Copyright (c) 2023 Mitchell Hashimoto
  * Copyright (c) 2026 Crrow
  */
 
@@ -12,16 +13,29 @@ import (
 	"sync"
 )
 
+// bufferPool reuses buffers to reduce allocation overhead.
+var bufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, chunkSize)
+		return &buf
+	},
+}
+
 // GoroutineCopier copies multiple files concurrently using goroutines.
 // Each file copy runs in its own goroutine with blocking I/O.
 type GoroutineCopier struct {
 	maxWorkers int
+	useSync    bool // whether to call Sync() after each file
 }
 
 // NewGoroutineCopier creates a copier with specified concurrency limit.
 // If maxWorkers <= 0, uses unlimited concurrency.
-func NewGoroutineCopier(maxWorkers int) *GoroutineCopier {
-	return &GoroutineCopier{maxWorkers: maxWorkers}
+// useSync controls whether to call Sync() after each file write.
+func NewGoroutineCopier(maxWorkers int, useSync bool) *GoroutineCopier {
+	return &GoroutineCopier{
+		maxWorkers: maxWorkers,
+		useSync:    useSync,
+	}
 }
 
 // CopyFiles copies all src files to dst paths concurrently.
@@ -39,7 +53,7 @@ func (c *GoroutineCopier) CopyFiles(pairs []FilePair) error {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				if err := copyFile(src, dst); err != nil {
+				if err := copyFile(src, dst, c.useSync); err != nil {
 					errCh <- fmt.Errorf("%s -> %s: %w", src, dst, err)
 				}
 			}(pair.Src, pair.Dst)
@@ -50,7 +64,7 @@ func (c *GoroutineCopier) CopyFiles(pairs []FilePair) error {
 			wg.Add(1)
 			go func(src, dst string) {
 				defer wg.Done()
-				if err := copyFile(src, dst); err != nil {
+				if err := copyFile(src, dst, c.useSync); err != nil {
 					errCh <- fmt.Errorf("%s -> %s: %w", src, dst, err)
 				}
 			}(pair.Src, pair.Dst)
@@ -71,7 +85,7 @@ func (c *GoroutineCopier) CopyFiles(pairs []FilePair) error {
 	return nil
 }
 
-func copyFile(srcPath, dstPath string) error {
+func copyFile(srcPath, dstPath string, useSync bool) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -84,11 +98,19 @@ func copyFile(srcPath, dstPath string) error {
 	}
 	defer dst.Close()
 
-	buf := make([]byte, chunkSize)
+	// Get buffer from pool
+	bufPtr := bufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer bufferPool.Put(bufPtr)
+
 	_, err = io.CopyBuffer(dst, src, buf)
 	if err != nil {
 		return err
 	}
 
-	return dst.Sync()
+	// Only sync if requested (adds significant overhead)
+	if useSync {
+		return dst.Sync()
+	}
+	return nil
 }

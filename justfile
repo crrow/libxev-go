@@ -262,3 +262,42 @@ docs-build:
 docs-open:
     @echo "📚 Opening cargo documentation..."
     cargo doc --workspace --all-features --no-deps --document-private-items --open
+
+# ========================================================================================
+# Examples
+# ========================================================================================
+
+[doc("run concurrent file copy benchmark")]
+[group("Examples")]
+example-concurrent-copy *ARGS:
+    @test -f {{ LIBXEV_EXT_PATH }} || just build-extended
+    cd examples/concurrent_copy && {{ GO }} run . {{ ARGS }}
+
+# ========================================================================================
+# Environment
+# ========================================================================================
+
+[doc("update .env with computed LIBXEV_EXT_PATH")]
+[group("Env")]
+env-update:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ENV_FILE="{{ justfile_directory() }}/.env"
+    update_key() {
+        local key="$1"
+        local value="$2"
+        if [ -f "$ENV_FILE" ]; then
+            tmp="$(mktemp)"
+            awk -v key="$key" -v val="$value" '
+                BEGIN { updated = 0 }
+                $0 ~ "^" key "=" { print key "=" val; updated = 1; next }
+                { print }
+                END { if (updated == 0) print key "=" val }
+            ' "$ENV_FILE" > "$tmp"
+            mv "$tmp" "$ENV_FILE"
+        else
+            printf '%s=%s\n' "$key" "$value" > "$ENV_FILE"
+        fi
+    }
+    update_key "LIBXEV_PATH" "{{ LIBXEV_PATH }}"
+    update_key "LIBXEV_EXT_PATH" "{{ LIBXEV_EXT_PATH }}"

@@ -1,5 +1,6 @@
 /*
  * MIT License
+ * Copyright (c) 2023 Mitchell Hashimoto
  * Copyright (c) 2026 Crrow
  */
 
@@ -12,22 +13,25 @@
 //
 // Usage:
 //
-//	go run . -files 100 -size 1048576 -mode both
+//	go run .
 //
-// Modes:
-//   - xev: Only run xev-based copy
-//   - goroutine: Only run goroutine-based copy
-//   - both: Run both and compare (default)
+// The program launches an interactive TUI to select and run benchmarks.
 package main
 
 import (
 	"crypto/rand"
-	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/joho/godotenv"
 
 	"github.com/crrow/libxev-go/pkg/cxev"
 )
@@ -38,98 +42,321 @@ type FilePair struct {
 	Dst string
 }
 
-func main() {
-	numFiles := flag.Int("files", 50, "number of files to copy")
-	fileSize := flag.Int64("size", 1024*1024, "size of each file in bytes")
-	mode := flag.String("mode", "both", "benchmark mode: xev, goroutine, or both")
-	workers := flag.Int("workers", 0, "max goroutine workers (0 = unlimited)")
-	keepFiles := flag.Bool("keep", false, "keep generated files after benchmark")
-	flag.Parse()
+// Scenario represents a benchmark test case.
+type Scenario struct {
+	Name  string
+	Files int
+	Size  int64
+}
 
-	fmt.Printf("Concurrent File Copy Benchmark\n")
-	fmt.Printf("==============================\n")
-	fmt.Printf("Files: %d, Size: %s each, Total: %s\n",
-		*numFiles, formatBytes(*fileSize), formatBytes(*fileSize*int64(*numFiles)))
-	fmt.Printf("GOMAXPROCS: %d\n", runtime.GOMAXPROCS(0))
-	fmt.Printf("Mode: %s\n\n", *mode)
+var scenarios = []Scenario{
+	{"1000 × 4KB", 1000, 4 * 1024},
+	{"200 × 64KB", 200, 64 * 1024},
+	{"100 × 256KB", 100, 256 * 1024},
+	{"50 × 1MB", 50, 1024 * 1024},
+	{"20 × 5MB", 20, 5 * 1024 * 1024},
+	{"10 × 10MB", 10, 10 * 1024 * 1024},
+	{"5 × 50MB", 5, 50 * 1024 * 1024},
+}
 
-	// Check xev availability
-	if !cxev.ExtLibLoaded() && (*mode == "xev" || *mode == "both") {
-		fmt.Println("WARNING: libxev extended library not loaded")
-		fmt.Println("Run 'just build-zig' to build the library")
-		if *mode == "xev" {
-			os.Exit(1)
+// Styles
+var (
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#7D56F4")).
+			MarginBottom(1)
+
+	subtitleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#626262"))
+
+	selectedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#7D56F4")).
+			Bold(true).
+			PaddingLeft(2).
+			PaddingRight(2)
+
+	itemStyle = lipgloss.NewStyle().
+			PaddingLeft(4)
+
+	resultStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#04B575")).
+			MarginTop(1)
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF0000"))
+
+	helpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#626262")).
+			MarginTop(1)
+)
+
+type model struct {
+	scenarios []Scenario
+	cursor    int
+	running   bool
+	result    string
+	err       error
+}
+
+type benchmarkMsg struct {
+	result string
+	err    error
+}
+
+func initialModel() model {
+	return model{
+		scenarios: scenarios,
+		cursor:    0,
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if m.running {
+			return m, nil
 		}
-		*mode = "goroutine"
+
+		switch {
+		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c", "q"))):
+			return m, tea.Quit
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("up", "k"))):
+			if m.cursor > 0 {
+				m.cursor--
+			}
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("down", "j"))):
+			if m.cursor < len(m.scenarios) {
+				m.cursor++
+			}
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("enter", " "))):
+			m.running = true
+			m.result = ""
+			m.err = nil
+
+			if m.cursor == len(m.scenarios) {
+				// Run all scenarios
+				return m, runAllScenarios
+			}
+			// Run selected scenario
+			return m, runBenchmark(m.scenarios[m.cursor])
+		}
+
+	case benchmarkMsg:
+		m.running = false
+		m.result = msg.result
+		m.err = msg.err
+		return m, nil
 	}
 
-	// Setup test files
-	srcDir, dstDir, pairs, err := setupTestFiles(*numFiles, *fileSize)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
-		os.Exit(1)
+	return m, nil
+}
+
+func (m model) View() string {
+	if m.running {
+		return "\n  Running benchmark...\n\n"
 	}
-	if !*keepFiles {
+
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("Concurrent File Copy Benchmark"))
+	b.WriteString("\n")
+	b.WriteString(subtitleStyle.Render(fmt.Sprintf("GOMAXPROCS: %d", runtime.GOMAXPROCS(0))))
+	b.WriteString("\n\n")
+
+	// Render menu items
+	for i, scenario := range m.scenarios {
+		cursor := "  "
+		style := itemStyle
+		if m.cursor == i {
+			cursor = "▶ "
+			style = selectedStyle
+		}
+		b.WriteString(cursor + style.Render(scenario.Name))
+		b.WriteString("\n")
+	}
+
+	// "Run All" option
+	cursor := "  "
+	style := itemStyle
+	if m.cursor == len(m.scenarios) {
+		cursor = "▶ "
+		style = selectedStyle
+	}
+	b.WriteString(cursor + style.Render("Run All Scenarios"))
+	b.WriteString("\n")
+
+	// Display result
+	if m.result != "" {
+		b.WriteString(resultStyle.Render("\n" + m.result))
+	}
+
+	if m.err != nil {
+		b.WriteString(errorStyle.Render(fmt.Sprintf("\nError: %v", m.err)))
+	}
+
+	// Help
+	b.WriteString(helpStyle.Render("\n\nUp/Down: Navigate • Enter: Run • q: Quit"))
+
+	return b.String()
+}
+
+func runBenchmark(scenario Scenario) tea.Cmd {
+	return func() tea.Msg {
+		// Check xev availability
+		if !cxev.ExtLibLoaded() {
+			return benchmarkMsg{
+				err: fmt.Errorf("libxev extended library not loaded. Run 'just build-extended'"),
+			}
+		}
+
+		// Setup test files
+		srcDir, dstDir, pairs, err := setupTestFiles(scenario.Files, scenario.Size)
+		if err != nil {
+			return benchmarkMsg{err: fmt.Errorf("setup failed: %w", err)}
+		}
 		defer os.RemoveAll(srcDir)
 		defer os.RemoveAll(dstDir)
-	} else {
-		fmt.Printf("Source dir: %s\n", srcDir)
-		fmt.Printf("Dest dir: %s\n\n", dstDir)
-	}
 
-	var xevDuration, goroutineDuration time.Duration
-
-	// Run xev benchmark
-	if *mode == "xev" || *mode == "both" {
-		fmt.Print("Running xev copy... ")
-		xevDuration, err = benchmarkXev(pairs)
+		// Run xev benchmark
+		xevDuration, err := benchmarkXev(pairs)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "xev copy failed: %v\n", err)
-		} else {
-			throughput := float64(*fileSize*int64(*numFiles)) / xevDuration.Seconds() / 1024 / 1024
-			fmt.Printf("done in %v (%.2f MB/s)\n", xevDuration.Round(time.Millisecond), throughput)
+			return benchmarkMsg{err: fmt.Errorf("xev copy failed: %w", err)}
 		}
 
-		// Clean dst for next run
-		if *mode == "both" {
-			cleanDstDir(dstDir, pairs)
-		}
-	}
+		// Clean dst for goroutine run
+		cleanDstDir(dstDir, pairs)
 
-	// Run goroutine benchmark
-	if *mode == "goroutine" || *mode == "both" {
-		workerDesc := "unlimited"
-		if *workers > 0 {
-			workerDesc = fmt.Sprintf("%d workers", *workers)
-		}
-		fmt.Printf("Running goroutine copy (%s)... ", workerDesc)
-		goroutineDuration, err = benchmarkGoroutine(pairs, *workers)
+		// Run goroutine benchmark
+		goroutineDuration, err := benchmarkGoroutine(pairs, 0)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "goroutine copy failed: %v\n", err)
-		} else {
-			throughput := float64(*fileSize*int64(*numFiles)) / goroutineDuration.Seconds() / 1024 / 1024
-			fmt.Printf("done in %v (%.2f MB/s)\n", goroutineDuration.Round(time.Millisecond), throughput)
+			return benchmarkMsg{err: fmt.Errorf("goroutine copy failed: %w", err)}
 		}
-	}
 
-	// Print comparison
-	if *mode == "both" && xevDuration > 0 && goroutineDuration > 0 {
-		fmt.Printf("\nComparison:\n")
+		// Verify copied files
+		if err := verifyFiles(pairs); err != nil {
+			return benchmarkMsg{err: fmt.Errorf("verification failed: %w", err)}
+		}
+
+		// Calculate results
+		totalSize := scenario.Size * int64(scenario.Files)
+		xevThroughput := float64(totalSize) / xevDuration.Seconds() / 1024 / 1024
+		goroutineThroughput := float64(totalSize) / goroutineDuration.Seconds() / 1024 / 1024
+
+		var winner string
 		if xevDuration < goroutineDuration {
 			speedup := float64(goroutineDuration) / float64(xevDuration)
-			fmt.Printf("  xev is %.2fx faster\n", speedup)
+			winner = fmt.Sprintf("xev %.2fx faster", speedup)
 		} else {
 			speedup := float64(xevDuration) / float64(goroutineDuration)
-			fmt.Printf("  goroutine is %.2fx faster\n", speedup)
+			winner = fmt.Sprintf("goroutine %.2fx faster", speedup)
+		}
+
+		result := fmt.Sprintf(
+			"%s\n  xev:       %v (%.2f MB/s)\n  goroutine: %v (%.2f MB/s)\n  Winner: %s",
+			scenario.Name,
+			xevDuration.Round(time.Millisecond),
+			xevThroughput,
+			goroutineDuration.Round(time.Millisecond),
+			goroutineThroughput,
+			winner,
+		)
+
+		return benchmarkMsg{result: result}
+	}
+}
+
+func runAllScenarios() tea.Msg {
+	// Find project root (look for justfile)
+	dir, err := os.Getwd()
+	if err != nil {
+		return benchmarkMsg{err: fmt.Errorf("get working directory: %w", err)}
+	}
+
+	// Walk up to find justfile
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "justfile")); err == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return benchmarkMsg{err: fmt.Errorf("justfile not found")}
+		}
+		dir = parent
+	}
+
+	// Run the just command
+	cmd := exec.Command("just", "example-concurrent-copy-bench")
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return benchmarkMsg{
+			result: string(output),
+			err:    fmt.Errorf("benchmark failed: %w", err),
 		}
 	}
 
-	// Verify copied files
-	if err := verifyFiles(pairs); err != nil {
-		fmt.Fprintf(os.Stderr, "verification failed: %v\n", err)
+	return benchmarkMsg{result: string(output)}
+}
+
+func main() {
+	p := tea.NewProgram(initialModel())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("\nVerification: OK")
+}
+
+func init() {
+	loadDotEnv()
+}
+
+func loadDotEnv() {
+	var paths []string
+
+	if exampleDir, err := exampleDir(); err == nil {
+		paths = append(paths, filepath.Join(exampleDir, ".env"))
+		if root, err := findRepoRoot(exampleDir); err == nil && root != exampleDir {
+			paths = append(paths, filepath.Join(root, ".env"))
+		}
+	} else if cwd, err := os.Getwd(); err == nil {
+		paths = append(paths, filepath.Join(cwd, ".env"))
+	}
+
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			_ = godotenv.Load(path)
+		}
+	}
+}
+
+func exampleDir() (string, error) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("runtime caller unavailable")
+	}
+	return filepath.Dir(filename), nil
+}
+
+func findRepoRoot(start string) (string, error) {
+	dir := start
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "justfile")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("repo root not found")
+		}
+		dir = parent
+	}
 }
 
 func setupTestFiles(numFiles int, fileSize int64) (srcDir, dstDir string, pairs []FilePair, err error) {
@@ -189,7 +416,8 @@ func benchmarkXev(pairs []FilePair) (time.Duration, error) {
 }
 
 func benchmarkGoroutine(pairs []FilePair, maxWorkers int) (time.Duration, error) {
-	copier := NewGoroutineCopier(maxWorkers)
+	// Don't use Sync() for fair comparison - xev doesn't sync either
+	copier := NewGoroutineCopier(maxWorkers, false)
 
 	start := time.Now()
 	err := copier.CopyFiles(pairs)

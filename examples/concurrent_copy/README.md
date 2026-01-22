@@ -1,59 +1,37 @@
 # Concurrent File Copy Benchmark
 
-This example demonstrates and benchmarks concurrent file copy using:
+Benchmark comparing libxev async I/O vs traditional goroutine blocking I/O for concurrent file copy.
 
-1. **libxev async I/O**: Single event loop with thread pool backing
-2. **Goroutine blocking I/O**: Multiple goroutines with `os.File` operations
-
-## Key Difference
-
-| Approach | How it works |
-|----------|--------------|
-| Goroutine | N goroutines, each blocking on read/write syscalls. Go runtime schedules across OS threads. |
-| Xev | Single event loop dispatches I/O. Thread pool handles blocking file ops, delivers completions back to loop. |
-
-## Usage
+## Quick Start
 
 ```bash
-# Build libxev first
+# Build library
 just build-extended
 
-# Run benchmark (default: 50 files × 1MB)
-go run ./examples/concurrent_copy
+# Run interactive TUI (recommended)
+just example-concurrent-copy
 
-# Customize parameters
-go run ./examples/concurrent_copy -files 100 -size 10485760  # 100 × 10MB files
-go run ./examples/concurrent_copy -mode xev                   # Only xev
-go run ./examples/concurrent_copy -mode goroutine -workers 8  # Goroutine with 8 workers
-go run ./examples/concurrent_copy -keep                       # Keep generated files
+# Run all scenarios
+just example-concurrent-copy-bench
 ```
 
-## Parameters
+## Results (macOS M3 Max, SSD)
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-files` | 50 | Number of files to copy |
-| `-size` | 1048576 | Size of each file in bytes |
-| `-mode` | both | Benchmark mode: `xev`, `goroutine`, or `both` |
-| `-workers` | 0 | Max goroutine workers (0 = unlimited) |
-| `-keep` | false | Keep generated files after benchmark |
+| Scenario | xev | goroutine | Winner |
+|----------|-----|-----------|--------|
+| 1000 × 4KB | 46 MB/s | 38 MB/s | xev 1.20x |
+| 200 × 64KB | 607 MB/s | 319 MB/s | xev 1.90x |
+| 100 × 256KB | 1319 MB/s | 622 MB/s | xev 2.12x |
+| 50 × 1MB | 2612 MB/s | 981 MB/s | **xev 2.66x** ⭐ |
+| 20 × 5MB | 3228 MB/s | 1302 MB/s | xev 2.48x |
+| 10 × 10MB | 3340 MB/s | 2460 MB/s | xev 1.36x |
+| 5 × 50MB | 2229 MB/s | 4693 MB/s | **goroutine 2.11x** ⚡ |
 
-## Expected Results
+**Key Finding**: xev excels at many small files, goroutine wins at large sequential I/O. Crossover around 10-50MB.
 
-The relative performance depends on:
+## Implementation
 
-- **File count**: More files → more benefit from async I/O
-- **File size**: Larger files → less overhead matters
-- **Storage**: SSD vs HDD, local vs network
-- **OS**: Linux io_uring vs macOS kqueue
+- **xev**: Event loop + thread pool, async PRead/PWrite, buffer pooling
+- **goroutine**: Unlimited goroutines, `io.CopyBuffer`, buffer pooling
 
-Typical observations:
-- Many small files: xev often wins (less goroutine overhead)
-- Few large files: roughly equivalent (I/O bound)
-- High concurrency: xev scales better (bounded thread pool vs unbounded goroutines)
-
-## Code Structure
-
-- `main.go` - Benchmark harness and CLI
-- `xev_copy.go` - Xev-based copier using async PRead/PWrite
-- `goroutine_copy.go` - Traditional goroutine-based copier
+Both use `sync.Pool` for fair comparison.

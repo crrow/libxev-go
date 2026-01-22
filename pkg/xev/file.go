@@ -8,7 +8,11 @@ package xev
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"runtime"
+	"sync"
+	"syscall"
 
 	"github.com/crrow/libxev-go/pkg/cxev"
 )
@@ -35,7 +39,7 @@ import (
 //	if err != nil {
 //	    return err
 //	}
-//	defer file.Cleanup()
+//	defer file.Close()
 //
 //	// Wrap an existing file descriptor
 //	file, err := xev.NewFileFromFd(int32(existingFd))
@@ -46,6 +50,9 @@ import (
 //
 //   - Sequential: [File.Read] and [File.Write] operate at the current file position
 //   - Positional: [File.PRead] and [File.PWrite] operate at a specific offset
+//
+// Each operation creates its own completion, allowing multiple concurrent
+// operations on the same file.
 //
 // Example sequential read:
 //
@@ -64,21 +71,9 @@ import (
 //	    // Wrote at offset 1024
 //	    return xev.Stop
 //	})
-//
-// # Cleanup
-//
-// Call [File.Close] to close the file asynchronously, then [File.Cleanup]
-// to release callback resources.
 type File struct {
-	file       cxev.File
-	completion cxev.FileCompletion
-	fd         int32
-	callbackID uintptr
-	loop       *Loop
-
-	readHandler  FileReadHandler
-	writeHandler FileWriteHandler
-	closeHandler FileCloseHandler
+	file cxev.File
+	fd   int32
 }
 
 // FileReadHandler handles file read completions.
@@ -138,6 +133,24 @@ func (f FileCloseFunc) OnClose(file *File, err error) {
 	}
 }
 
+// fileOp holds per-operation state including completion and callback ID.
+// Each async operation gets its own fileOp, allowing concurrent operations.
+// The completion and buffer must be pinned to prevent GC from moving them while C code holds pointers.
+type fileOp struct {
+	file       *File
+	loop       *Loop
+	completion cxev.FileCompletion
+	callbackID uintptr
+	buf        []byte         // for read operations, to pass to callback
+	pinner     runtime.Pinner // pins completion and buffer
+
+	readHandler  FileReadHandler
+	writeHandler FileWriteHandler
+	closeHandler FileCloseHandler
+}
+
+var activeFileOps sync.Map
+
 // OpenFile opens a file for async operations.
 //
 // The flag and perm parameters work the same as [os.OpenFile]. Common flags:
@@ -168,10 +181,22 @@ func OpenFile(path string, flag int, perm os.FileMode) (*File, error) {
 		return nil, err
 	}
 
-	fd := int32(f.Fd())
+	// Duplicate the fd so libxev has its own copy independent of Go's GC.
+	// Go's runtime sets a finalizer on *os.File that closes the fd when
+	// the file becomes unreachable. By using dup, we get a separate fd
+	// that libxev can use without risk of Go closing it unexpectedly.
+	origFd := int(f.Fd())
+	dupFd, err := syscall.Dup(origFd)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("dup fd: %w", err)
+	}
 
-	file := &File{fd: fd}
-	cxev.FileInitFd(&file.file, fd)
+	// Close the original - Go can finalize it freely now
+	f.Close()
+
+	file := &File{fd: int32(dupFd)}
+	cxev.FileInitFd(&file.file, int32(dupFd))
 
 	return file, nil
 }
@@ -209,10 +234,17 @@ func (f *File) Fd() int32 {
 // Return [Continue] from the handler to keep reading sequentially, or [Stop]
 // to stop.
 func (f *File) Read(loop *Loop, buf []byte, handler FileReadHandler) error {
-	f.loop = loop
-	f.readHandler = handler
+	op := &fileOp{
+		file:        f,
+		loop:        loop,
+		buf:         buf,
+		readHandler: handler,
+	}
+	op.pinner.Pin(&op.completion)
+	op.pinner.Pin(&buf[0])
 
-	f.callbackID = cxev.FileReadWithCallback(&f.file, &loop.inner, &f.completion, buf, f.readCallback)
+	op.callbackID = cxev.FileReadWithCallback(&f.file, &loop.inner, &op.completion, buf, op.readCallback)
+	activeFileOps.Store(op.callbackID, op)
 	return nil
 }
 
@@ -223,16 +255,20 @@ func (f *File) ReadFunc(loop *Loop, buf []byte, fn func(file *File, data []byte,
 	return f.Read(loop, buf, FileReadFunc(fn))
 }
 
-func (f *File) readCallback(loop *cxev.Loop, c *cxev.FileCompletion, data []byte, bytesRead int32, errCode int32, userdata uintptr) cxev.CbAction {
+func (op *fileOp) readCallback(loop *cxev.Loop, c *cxev.FileCompletion, data []byte, bytesRead int32, errCode int32, userdata uintptr) cxev.CbAction {
 	var err error
 	if errCode != 0 {
-		err = errors.New("read error")
+		err = fmt.Errorf("read error: code=%d, bytesRead=%d", errCode, bytesRead)
 	}
 
-	action := f.readHandler.OnRead(f, data, err)
+	action := op.readHandler.OnRead(op.file, data, err)
 	if action == Continue {
 		return cxev.Rearm
 	}
+
+	activeFileOps.Delete(op.callbackID)
+	op.pinner.Unpin()
+	cxev.UnregisterFileCallback(op.callbackID)
 	return cxev.Disarm
 }
 
@@ -240,10 +276,17 @@ func (f *File) readCallback(loop *cxev.Loop, c *cxev.FileCompletion, data []byte
 //
 // The handler's OnWrite method is called when the write completes.
 func (f *File) Write(loop *Loop, data []byte, handler FileWriteHandler) error {
-	f.loop = loop
-	f.writeHandler = handler
+	op := &fileOp{
+		file:         f,
+		loop:         loop,
+		buf:          data,
+		writeHandler: handler,
+	}
+	op.pinner.Pin(&op.completion)
+	op.pinner.Pin(&data[0])
 
-	f.callbackID = cxev.FileWriteWithCallback(&f.file, &loop.inner, &f.completion, data, f.writeCallback)
+	op.callbackID = cxev.FileWriteWithCallback(&f.file, &loop.inner, &op.completion, data, op.writeCallback)
+	activeFileOps.Store(op.callbackID, op)
 	return nil
 }
 
@@ -254,16 +297,20 @@ func (f *File) WriteFunc(loop *Loop, data []byte, fn func(file *File, bytesWritt
 	return f.Write(loop, data, FileWriteFunc(fn))
 }
 
-func (f *File) writeCallback(loop *cxev.Loop, c *cxev.FileCompletion, bytesWritten int32, errCode int32, userdata uintptr) cxev.CbAction {
+func (op *fileOp) writeCallback(loop *cxev.Loop, c *cxev.FileCompletion, bytesWritten int32, errCode int32, userdata uintptr) cxev.CbAction {
 	var err error
 	if errCode != 0 {
-		err = errors.New("write error")
+		err = fmt.Errorf("write error: code=%d, bytesWritten=%d", errCode, bytesWritten)
 	}
 
-	action := f.writeHandler.OnWrite(f, int(bytesWritten), err)
+	action := op.writeHandler.OnWrite(op.file, int(bytesWritten), err)
 	if action == Continue {
 		return cxev.Rearm
 	}
+
+	activeFileOps.Delete(op.callbackID)
+	op.pinner.Unpin()
+	cxev.UnregisterFileCallback(op.callbackID)
 	return cxev.Disarm
 }
 
@@ -275,10 +322,17 @@ func (f *File) writeCallback(loop *cxev.Loop, c *cxev.FileCompletion, bytesWritt
 //
 // The offset is in bytes from the start of the file.
 func (f *File) PRead(loop *Loop, buf []byte, offset uint64, handler FileReadHandler) error {
-	f.loop = loop
-	f.readHandler = handler
+	op := &fileOp{
+		file:        f,
+		loop:        loop,
+		buf:         buf,
+		readHandler: handler,
+	}
+	op.pinner.Pin(&op.completion)
+	op.pinner.Pin(&buf[0])
 
-	f.callbackID = cxev.FilePReadWithCallback(&f.file, &loop.inner, &f.completion, buf, offset, f.readCallback)
+	op.callbackID = cxev.FilePReadWithCallback(&f.file, &loop.inner, &op.completion, buf, offset, op.readCallback)
+	activeFileOps.Store(op.callbackID, op)
 	return nil
 }
 
@@ -297,10 +351,17 @@ func (f *File) PReadFunc(loop *Loop, buf []byte, offset uint64, fn func(file *Fi
 //
 // The offset is in bytes from the start of the file.
 func (f *File) PWrite(loop *Loop, data []byte, offset uint64, handler FileWriteHandler) error {
-	f.loop = loop
-	f.writeHandler = handler
+	op := &fileOp{
+		file:         f,
+		loop:         loop,
+		buf:          data,
+		writeHandler: handler,
+	}
+	op.pinner.Pin(&op.completion)
+	op.pinner.Pin(&data[0])
 
-	f.callbackID = cxev.FilePWriteWithCallback(&f.file, &loop.inner, &f.completion, data, offset, f.writeCallback)
+	op.callbackID = cxev.FilePWriteWithCallback(&f.file, &loop.inner, &op.completion, data, offset, op.writeCallback)
+	activeFileOps.Store(op.callbackID, op)
 	return nil
 }
 
@@ -313,22 +374,29 @@ func (f *File) PWriteFunc(loop *Loop, data []byte, offset uint64, fn func(file *
 
 // Close starts an async close operation.
 //
-// The handler (if non-nil) is called when the close completes. After close
-// completes, call [File.Cleanup] to release callback resources.
+// The handler (if non-nil) is called when the close completes.
 func (f *File) Close(loop *Loop, handler FileCloseHandler) error {
-	f.loop = loop
-	f.closeHandler = handler
+	op := &fileOp{
+		file:         f,
+		loop:         loop,
+		closeHandler: handler,
+	}
+	op.pinner.Pin(&op.completion)
 
-	cxev.FileCloseWithCallback(&f.file, &loop.inner, &f.completion, func(loop *cxev.Loop, c *cxev.FileCompletion, result int32, userdata uintptr) cxev.CbAction {
+	op.callbackID = cxev.FileCloseWithCallback(&f.file, &loop.inner, &op.completion, func(loop *cxev.Loop, c *cxev.FileCompletion, result int32, userdata uintptr) cxev.CbAction {
 		var err error
 		if result != 0 {
 			err = errors.New("close error")
 		}
-		if f.closeHandler != nil {
-			f.closeHandler.OnClose(f, err)
+		if op.closeHandler != nil {
+			op.closeHandler.OnClose(op.file, err)
 		}
+		activeFileOps.Delete(op.callbackID)
+		op.pinner.Unpin()
+		cxev.UnregisterFileCallback(op.callbackID)
 		return cxev.Disarm
 	})
+	activeFileOps.Store(op.callbackID, op)
 	return nil
 }
 
@@ -339,13 +407,8 @@ func (f *File) CloseFunc(loop *Loop, fn func(file *File, err error)) error {
 	return f.Close(loop, FileCloseFunc(fn))
 }
 
-// Cleanup releases callback resources.
-//
-// Call this after [File.Close] completes or if an error occurs during file
-// operations. This unregisters any pending callbacks to prevent memory leaks.
+// Cleanup is deprecated - callbacks are now automatically cleaned up.
+// This method is kept for backward compatibility but does nothing.
 func (f *File) Cleanup() {
-	if f.callbackID != 0 {
-		cxev.UnregisterFileCallback(f.callbackID)
-		f.callbackID = 0
-	}
+	// No-op: callbacks are cleaned up automatically when operations complete
 }

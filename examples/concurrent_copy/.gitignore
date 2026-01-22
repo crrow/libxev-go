@@ -1,0 +1,9 @@
+# Benchmark outputs
+benchmark_results.txt
+benchmark_comparison.png
+
+# Go build artifacts
+director/director
+
+# Test data (if -keep flag used)
+/tmp/copy_bench_*

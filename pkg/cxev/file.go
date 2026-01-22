@@ -259,6 +259,12 @@ func fileReadTrampoline(cif *ffi.Cif, ret unsafe.Pointer, args *unsafe.Pointer, 
 	return 0
 }
 
+// fileWriteContext holds the buffer for write callbacks to prevent GC.
+type fileWriteContext struct {
+	cb  FileWriteCallback
+	buf []byte
+}
+
 func fileWriteTrampoline(cif *ffi.Cif, ret unsafe.Pointer, args *unsafe.Pointer, userData unsafe.Pointer) uintptr {
 	arguments := unsafe.Slice(args, 5)
 	loop := *(*unsafe.Pointer)(arguments[0])
@@ -268,8 +274,9 @@ func fileWriteTrampoline(cif *ffi.Cif, ret unsafe.Pointer, args *unsafe.Pointer,
 	userdata := *(*uintptr)(arguments[4])
 
 	action := int32(Disarm)
-	if cb, ok := fileWriteCallbackRegistry.Load(userdata); ok {
-		action = int32(cb.(FileWriteCallback)(
+	if ctx, ok := fileWriteCallbackRegistry.Load(userdata); ok {
+		writeCtx := ctx.(fileWriteContext)
+		action = int32(writeCtx.cb(
 			(*Loop)(loop),
 			(*FileCompletion)(completion),
 			bytesWritten,
@@ -295,10 +302,10 @@ func RegisterFileReadCallback(cb FileReadCallback, buf []byte) uintptr {
 	return id
 }
 
-// RegisterFileWriteCallback registers a File write callback.
-func RegisterFileWriteCallback(cb FileWriteCallback) uintptr {
+// RegisterFileWriteCallback registers a File write callback with its buffer.
+func RegisterFileWriteCallback(cb FileWriteCallback, buf []byte) uintptr {
 	id := uintptr(atomic.AddUint64(&fileCallbackCounter, 1))
-	fileWriteCallbackRegistry.Store(id, cb)
+	fileWriteCallbackRegistry.Store(id, fileWriteContext{cb: cb, buf: buf})
 	return id
 }
 
@@ -358,7 +365,7 @@ func FileWrite(file *File, loop *Loop, c *FileCompletion, buf []byte, userdata, 
 // FileWriteWithCallback is a convenience function that registers the callback and starts writing.
 func FileWriteWithCallback(file *File, loop *Loop, c *FileCompletion, buf []byte, cb FileWriteCallback) uintptr {
 	initFileClosures()
-	id := RegisterFileWriteCallback(cb)
+	id := RegisterFileWriteCallback(cb, buf)
 	FileWrite(file, loop, c, buf, id, fileWriteCallbackPtr)
 	return id
 }
@@ -394,7 +401,7 @@ func FilePWrite(file *File, loop *Loop, c *FileCompletion, buf []byte, offset ui
 // FilePWriteWithCallback is a convenience function for positional write.
 func FilePWriteWithCallback(file *File, loop *Loop, c *FileCompletion, buf []byte, offset uint64, cb FileWriteCallback) uintptr {
 	initFileClosures()
-	id := RegisterFileWriteCallback(cb)
+	id := RegisterFileWriteCallback(cb, buf)
 	FilePWrite(file, loop, c, buf, offset, id, fileWriteCallbackPtr)
 	return id
 }
