@@ -54,8 +54,6 @@ var (
 	fnSockaddrIPv4   ffi.Fun
 	fnSockaddrIPv6   ffi.Fun
 	fnSockaddrPort   ffi.Fun
-	fnSizeofTCP      ffi.Fun
-	fnSizeofSockaddr ffi.Fun
 	fnAfInet         ffi.Fun
 	fnAfInet6        ffi.Fun
 )

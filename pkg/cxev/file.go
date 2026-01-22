@@ -29,15 +29,13 @@ type FileCompletion [SizeofFileCompletion]byte
 
 // FFI function descriptors for File operations.
 var (
-	fnFileInitFd  ffi.Fun
-	fnFileFd      ffi.Fun
-	fnFileRead    ffi.Fun
-	fnFileWrite   ffi.Fun
-	fnFilePRead   ffi.Fun
-	fnFilePWrite  ffi.Fun
-	fnFileClose   ffi.Fun
-	fnSizeofFile  ffi.Fun
-	fnSizeofFileC ffi.Fun
+	fnFileInitFd ffi.Fun
+	fnFileFd     ffi.Fun
+	fnFileRead   ffi.Fun
+	fnFileWrite  ffi.Fun
+	fnFilePRead  ffi.Fun
+	fnFilePWrite ffi.Fun
+	fnFileClose  ffi.Fun
 )
 
 func registerFileFunctions() error {
