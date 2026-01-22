@@ -1,0 +1,18 @@
+.{
+    .name = .xev_extended,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.1",
+    .fingerprint = 0x6e332e71f5270c4d,
+
+    .dependencies = .{
+        .libxev = .{
+            .path = "../deps/libxev",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "tcp_api.zig",
+    },
+}
