@@ -20,6 +20,16 @@ linters:
     - gocritic
     - nilerr
     - errorlint
+
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - hugeParam
+        - exitAfterDefer
+
   exclusions:
     generated: lax
     presets:
@@ -34,7 +44,8 @@ linters:
           - errcheck
           - gocritic
       - path: cmd/
-        linters: [all]
+        linters:
+          - all
       - path: pkg/xev/(tcp|udp)\.go
         linters:
           - errcheck
@@ -49,12 +60,6 @@ formatters:
       local-prefixes:
         - github.com/crrow/libxev-go
 
-linters-settings:
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-    disabled-checks:
-      - whyNoLint
-      - hugeParam
-      - exitAfterDefer
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

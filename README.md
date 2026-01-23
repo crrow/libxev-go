@@ -15,18 +15,24 @@ Go bindings for [libxev](https://github.com/mitchellh/libxev), a high-performanc
 
 ## Architecture
 
-```
-┌─────────────────────────────────────┐
-│  Your Application                   │
-├─────────────────────────────────────┤
-│  xev (high-level Go API)            │  pkg/xev/
-├─────────────────────────────────────┤
-│  cxev (low-level FFI bindings)      │  pkg/cxev/
-├─────────────────────────────────────┤
-│  libffi (C calling convention)      │  github.com/jupiterrider/ffi
-├─────────────────────────────────────┤
-│  libxev (Zig event loop library)    │  deps/libxev/
-└─────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["🚀 Your Application"]
+    B["📦 xev<br/><small>High-level Go API</small><br/><small><i>pkg/xev/</i></small>"]
+    C["⚙️ cxev<br/><small>Low-level FFI bindings</small><br/><small><i>pkg/cxev/</i></small>"]
+    D["🔗 libffi<br/><small>C calling convention</small><br/><small><i>github.com/jupiterrider/ffi</i></small>"]
+    E["⚡ libxev<br/><small>Zig event loop</small><br/><small><i>deps/libxev/</i></small>"]
+
+    A ==> B
+    B ==> C
+    C ==> D
+    D ==> E
+
+    style A fill:#f0f4ff,stroke:#5e72e4,stroke-width:2px
+    style B fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    style C fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style D fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    style E fill:#fce4ec,stroke:#e91e63,stroke-width:2px
 ```
 
 ## Quick Start

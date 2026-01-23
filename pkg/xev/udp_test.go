@@ -7,6 +7,7 @@
 package xev
 
 import (
+	"bytes"
 	"net"
 	"testing"
 )
@@ -117,7 +118,7 @@ func TestUDPEcho(t *testing.T) {
 		t.Error("Client did not complete")
 	}
 
-	if string(receivedData) != string(testMessage) {
+	if !bytes.Equal(receivedData, testMessage) {
 		t.Errorf("Server received %q, expected %q", string(receivedData), string(testMessage))
 	}
 
@@ -125,7 +126,7 @@ func TestUDPEcho(t *testing.T) {
 		t.Error("Server did not receive sender address")
 	}
 
-	if string(echoData) != string(testMessage) {
+	if !bytes.Equal(echoData, testMessage) {
 		t.Errorf("Client received echo %q, expected %q", string(echoData), string(testMessage))
 	}
 }
