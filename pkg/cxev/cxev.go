@@ -91,6 +91,18 @@ const (
 // Always pass by pointer to C functions.
 type Loop [SizeofLoop]byte
 
+// LoopOptions contains configuration for Loop initialization.
+// This matches xev.Options in libxev.
+type LoopOptions struct {
+	// Entries is the number of queued completions that can be in flight.
+	// Only used by io_uring backend. Default: 256
+	Entries uint32
+
+	// ThreadPool for blocking operations (epoll, kqueue backends).
+	// Set to nil if no thread pool is needed.
+	ThreadPool *ThreadPool
+}
+
 // Completion represents a pending I/O operation or timer.
 // Each operation (timer fire, async notification, etc.) requires its own
 // Completion instance. The completion tracks the operation state and stores

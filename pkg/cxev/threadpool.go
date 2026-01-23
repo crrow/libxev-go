@@ -17,7 +17,6 @@ var (
 	fnThreadPoolDeinit     ffi.Fun
 	fnThreadPoolShutdown   ffi.Fun
 	fnThreadPoolConfigInit ffi.Fun
-	fnLoopSetThreadPool    ffi.Fun
 )
 
 func registerThreadPoolFunctions() error {
@@ -43,12 +42,9 @@ func registerThreadPoolFunctions() error {
 		return err
 	}
 
-	if libExt.Addr != 0 {
-		fnLoopSetThreadPool, err = libExt.Prep("xev_loop_set_thread_pool", &ffi.TypeVoid, &ffi.TypePointer, &ffi.TypePointer)
-		if err != nil {
-			return err
-		}
-	}
+	// NOTE: xev_loop_set_thread_pool is removed in the new libxev API.
+	// Thread pools must now be passed via LoopOptions during initialization.
+	// Use LoopInitWithOptions instead.
 
 	return nil
 }
@@ -77,8 +73,17 @@ func ThreadPoolShutdown(pool *ThreadPool) {
 	fnThreadPoolShutdown.Call(nil, &ptr)
 }
 
-func LoopSetThreadPool(loop *Loop, pool *ThreadPool) {
-	loopPtr := unsafe.Pointer(loop)
-	poolPtr := unsafe.Pointer(pool)
-	fnLoopSetThreadPool.Call(nil, &loopPtr, &poolPtr)
-}
+// NOTE: LoopSetThreadPool is deprecated and removed.
+// libxev no longer supports setting thread_pool after Loop initialization.
+// Use LoopInitWithOptions to pass a thread pool during initialization instead.
+//
+// Example:
+//   var pool ThreadPool
+//   ThreadPoolInit(&pool, nil)
+//
+//   var loop Loop
+//   opts := &LoopOptions{
+//       Entries: 256,
+//       ThreadPool: &pool,
+//   }
+//   LoopInitWithOptions(&loop, opts)

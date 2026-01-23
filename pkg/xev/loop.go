@@ -123,11 +123,19 @@ func NewLoop() (*Loop, error) {
 //	// Use file with async operations...
 func NewLoopWithThreadPool() (*Loop, error) {
 	l := &Loop{hasPool: true}
-	if err := cxev.LoopInit(&l.inner); err != nil {
+
+	// Initialize thread pool first
+	cxev.ThreadPoolInit(&l.threadPool, nil)
+
+	// Initialize loop with thread pool via options
+	opts := &cxev.LoopOptions{
+		Entries:    256,
+		ThreadPool: &l.threadPool,
+	}
+	if err := cxev.LoopInitWithOptions(&l.inner, opts); err != nil {
 		return nil, err
 	}
-	cxev.ThreadPoolInit(&l.threadPool, nil)
-	cxev.LoopSetThreadPool(&l.inner, &l.threadPool)
+
 	return l, nil
 }
 

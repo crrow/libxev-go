@@ -21,11 +21,12 @@ import (
 //   - Call Interface (CIF) describing the function signature
 //   - Type information for marshaling arguments and return values
 var (
-	fnLoopInit      ffi.Fun
-	fnLoopDeinit    ffi.Fun
-	fnLoopRun       ffi.Fun
-	fnLoopNow       ffi.Fun
-	fnLoopUpdateNow ffi.Fun
+	fnLoopInit            ffi.Fun
+	fnLoopInitWithOptions ffi.Fun
+	fnLoopDeinit          ffi.Fun
+	fnLoopRun             ffi.Fun
+	fnLoopNow             ffi.Fun
+	fnLoopUpdateNow       ffi.Fun
 )
 
 // registerFunctions prepares all FFI function descriptors.
@@ -91,6 +92,17 @@ func registerFunctions() error {
 }
 
 func registerExtendedFunctions() error {
+	var err error
+
+	// int xev_loop_init_with_options(xev_loop* loop, xev_options* options)
+	// Initialize loop with options including thread pool support
+	if libExt.Addr != 0 {
+		fnLoopInitWithOptions, err = libExt.Prep("xev_loop_init_with_options", &ffi.TypeSint32, &ffi.TypePointer, &ffi.TypePointer)
+		if err != nil {
+			return err
+		}
+	}
+
 	return registerThreadPoolFunctions()
 }
 
@@ -122,6 +134,27 @@ func LoopInit(loop *Loop) error {
 	fnLoopInit.Call(&ret, &ptr)
 	if int32(ret) != 0 {
 		return errors.New("xev_loop_init failed")
+	}
+	return nil
+}
+
+// LoopInitWithOptions initializes a loop with custom options.
+// This allows setting a thread pool during initialization, which is required
+// for the new libxev API (thread_pool can no longer be set after init).
+func LoopInitWithOptions(loop *Loop, options *LoopOptions) error {
+	if loadErr != nil {
+		return loadErr
+	}
+	if fnLoopInitWithOptions.Addr == 0 {
+		return errors.New("xev_loop_init_with_options not available (extended library not loaded)")
+	}
+
+	var ret ffi.Arg
+	loopPtr := unsafe.Pointer(loop)
+	optsPtr := unsafe.Pointer(options)
+	fnLoopInitWithOptions.Call(&ret, &loopPtr, &optsPtr)
+	if int32(ret) != 0 {
+		return errors.New("xev_loop_init_with_options failed")
 	}
 	return nil
 }

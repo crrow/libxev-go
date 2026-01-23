@@ -8,8 +8,15 @@ pub const tcp = @import("tcp_api.zig");
 pub const file = @import("file_api.zig");
 pub const udp = @import("udp_api.zig");
 
-export fn xev_loop_set_thread_pool(loop: *xev.Loop, pool: *xev.ThreadPool) void {
-    loop.thread_pool = pool;
+// Initialize a loop with options including thread pool support.
+// This replaces the old xev_loop_set_thread_pool pattern which is no longer
+// supported by libxev. Thread pools must now be passed during initialization.
+export fn xev_loop_init_with_options(loop: *xev.Loop, options: *const xev.Options) c_int {
+    const result = xev.Loop.init(options.*) catch {
+        return -1;
+    };
+    loop.* = result;
+    return 0;
 }
 
 comptime {
