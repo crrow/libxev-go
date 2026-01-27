@@ -54,6 +54,7 @@ pub fn build(b: *std.Build) void {
         .name = "extended_api_test",
         .root_module = test_module,
     });
+    tests.linkLibC();
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
