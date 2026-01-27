@@ -418,7 +418,11 @@ export fn xev_loop_sizeof_actual() usize {
 }
 
 export fn xev_loop_thread_pool_offset() usize {
-    return @offsetOf(xev.Loop, "thread_pool");
+    // thread_pool only exists on kqueue/epoll backends, not io_uring
+    if (@hasField(xev.Loop, "thread_pool")) {
+        return @offsetOf(xev.Loop, "thread_pool");
+    }
+    return 0;
 }
 
 export fn xev_options_sizeof() usize {

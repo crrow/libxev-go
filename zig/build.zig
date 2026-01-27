@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) void {
         .name = "xev_extended",
         .root_module = root_module,
     });
+    dynamic_lib.linkLibC();
     b.installArtifact(dynamic_lib);
 
     const static_lib_module = b.createModule(.{
