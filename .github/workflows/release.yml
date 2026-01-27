@@ -46,7 +46,7 @@ jobs:
         env:
           LIBXEV_PATH: ${{ github.workspace }}/deps/libxev/zig-out/lib/libxev.so
           LIBXEV_EXT_PATH: ${{ github.workspace }}/zig/zig-out/lib/libxev_extended.so
-        run: go test -v -race ./...
+        run: go test -v -race -timeout=5m ./...
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
