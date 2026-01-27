@@ -252,7 +252,7 @@ func (c *UDPConn) readCallback(loop *cxev.Loop, comp *cxev.UDPCompletion, remote
 	}
 
 	var addr *net.UDPAddr
-	if remoteAddr != nil && bytesRead > 0 {
+	if remoteAddr != nil {
 		addr = sockaddrToUDPAddr(remoteAddr)
 	}
 
@@ -295,6 +295,10 @@ func (c *UDPConn) WriteToFunc(loop *Loop, data []byte, address string, fn func(c
 // This is useful for replying to received datagrams, where you already have
 // the sender's address from the read callback.
 func (c *UDPConn) WriteToAddr(loop *Loop, data []byte, addr *net.UDPAddr, handler UDPWriteHandler) error {
+	if addr == nil {
+		return errors.New("address is nil")
+	}
+
 	c.loop = loop
 	c.writeHandler = handler
 
