@@ -137,9 +137,9 @@ func (f FileCloseFunc) OnClose(file *File, err error) {
 // Each async operation gets its own fileOp, allowing concurrent operations.
 // The completion and buffer must be pinned to prevent GC from moving them while C code holds pointers.
 type fileOp struct {
+	completion cxev.FileCompletion
 	file       *File
 	loop       *Loop
-	completion cxev.FileCompletion
 	callbackID uintptr
 	buf        []byte         // for read operations, to pass to callback
 	pinner     runtime.Pinner // pins completion and buffer
@@ -242,6 +242,7 @@ func (f *File) Read(loop *Loop, buf []byte, handler FileReadHandler) error {
 	}
 	op.pinner.Pin(&op.completion)
 	op.pinner.Pin(&buf[0])
+	op.pinner.Pin(&f.file)
 
 	op.callbackID = cxev.FileReadWithCallback(&f.file, &loop.inner, &op.completion, buf, op.readCallback)
 	activeFileOps.Store(op.callbackID, op)
@@ -284,6 +285,7 @@ func (f *File) Write(loop *Loop, data []byte, handler FileWriteHandler) error {
 	}
 	op.pinner.Pin(&op.completion)
 	op.pinner.Pin(&data[0])
+	op.pinner.Pin(&f.file)
 
 	op.callbackID = cxev.FileWriteWithCallback(&f.file, &loop.inner, &op.completion, data, op.writeCallback)
 	activeFileOps.Store(op.callbackID, op)
@@ -330,6 +332,7 @@ func (f *File) PRead(loop *Loop, buf []byte, offset uint64, handler FileReadHand
 	}
 	op.pinner.Pin(&op.completion)
 	op.pinner.Pin(&buf[0])
+	op.pinner.Pin(&f.file)
 
 	op.callbackID = cxev.FilePReadWithCallback(&f.file, &loop.inner, &op.completion, buf, offset, op.readCallback)
 	activeFileOps.Store(op.callbackID, op)
@@ -359,6 +362,7 @@ func (f *File) PWrite(loop *Loop, data []byte, offset uint64, handler FileWriteH
 	}
 	op.pinner.Pin(&op.completion)
 	op.pinner.Pin(&data[0])
+	op.pinner.Pin(&f.file)
 
 	op.callbackID = cxev.FilePWriteWithCallback(&f.file, &loop.inner, &op.completion, data, offset, op.writeCallback)
 	activeFileOps.Store(op.callbackID, op)
@@ -382,6 +386,7 @@ func (f *File) Close(loop *Loop, handler FileCloseHandler) error {
 		closeHandler: handler,
 	}
 	op.pinner.Pin(&op.completion)
+	op.pinner.Pin(&f.file)
 
 	op.callbackID = cxev.FileCloseWithCallback(&f.file, &loop.inner, &op.completion, func(loop *cxev.Loop, c *cxev.FileCompletion, result int32, userdata uintptr) cxev.CbAction {
 		var err error

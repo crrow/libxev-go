@@ -17,7 +17,7 @@ import (
 // File-related sizes from the extended API.
 const (
 	SizeofFile           = 16  // xev_file: file descriptor storage
-	SizeofFileCompletion = 320 // Extended completion with callback pointer
+	SizeofFileCompletion = 320 // Extended completion: 256 (xev.Completion) + 8 (c_callback) + 8 (c_userdata) + padding
 )
 
 // File represents a file handle for async I/O.
@@ -53,35 +53,35 @@ func registerFileFunctions() error {
 		return err
 	}
 
-	// void xev_file_read(file, loop, completion, buf, buf_len, userdata, callback)
+	// void xev_file_read(file, loop, completion, buf, buf_len, callback, userdata)
 	fnFileRead, err = libExt.Prep("xev_file_read", &ffi.TypeVoid,
 		&ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypeUint64, &ffi.TypePointer, &ffi.TypePointer)
 	if err != nil {
 		return err
 	}
 
-	// void xev_file_write(file, loop, completion, buf, buf_len, userdata, callback)
+	// void xev_file_write(file, loop, completion, buf, buf_len, callback, userdata)
 	fnFileWrite, err = libExt.Prep("xev_file_write", &ffi.TypeVoid,
 		&ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypeUint64, &ffi.TypePointer, &ffi.TypePointer)
 	if err != nil {
 		return err
 	}
 
-	// void xev_file_pread(file, loop, completion, buf, buf_len, offset, userdata, callback)
+	// void xev_file_pread(file, loop, completion, buf, buf_len, offset, callback, userdata)
 	fnFilePRead, err = libExt.Prep("xev_file_pread", &ffi.TypeVoid,
 		&ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypeUint64, &ffi.TypeUint64, &ffi.TypePointer, &ffi.TypePointer)
 	if err != nil {
 		return err
 	}
 
-	// void xev_file_pwrite(file, loop, completion, buf, buf_len, offset, userdata, callback)
+	// void xev_file_pwrite(file, loop, completion, buf, buf_len, offset, callback, userdata)
 	fnFilePWrite, err = libExt.Prep("xev_file_pwrite", &ffi.TypeVoid,
 		&ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypeUint64, &ffi.TypeUint64, &ffi.TypePointer, &ffi.TypePointer)
 	if err != nil {
 		return err
 	}
 
-	// void xev_file_close(file, loop, completion, userdata, callback)
+	// void xev_file_close(file, loop, completion, callback, userdata)
 	fnFileClose, err = libExt.Prep("xev_file_close", &ffi.TypeVoid,
 		&ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer)
 	if err != nil {
@@ -341,7 +341,7 @@ func FileRead(file *File, loop *Loop, c *FileCompletion, buf []byte, userdata, c
 	cPtr := unsafe.Pointer(c)
 	bufPtr := unsafe.Pointer(&buf[0])
 	bufLen := uint64(len(buf))
-	fnFileRead.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &userdata, &cb)
+	fnFileRead.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &cb, &userdata)
 }
 
 // FileReadWithCallback is a convenience function that registers the callback and starts reading.
@@ -359,7 +359,7 @@ func FileWrite(file *File, loop *Loop, c *FileCompletion, buf []byte, userdata, 
 	cPtr := unsafe.Pointer(c)
 	bufPtr := unsafe.Pointer(&buf[0])
 	bufLen := uint64(len(buf))
-	fnFileWrite.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &userdata, &cb)
+	fnFileWrite.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &cb, &userdata)
 }
 
 // FileWriteWithCallback is a convenience function that registers the callback and starts writing.
@@ -377,7 +377,7 @@ func FilePRead(file *File, loop *Loop, c *FileCompletion, buf []byte, offset uin
 	cPtr := unsafe.Pointer(c)
 	bufPtr := unsafe.Pointer(&buf[0])
 	bufLen := uint64(len(buf))
-	fnFilePRead.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &offset, &userdata, &cb)
+	fnFilePRead.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &offset, &cb, &userdata)
 }
 
 // FilePReadWithCallback is a convenience function for positional read.
@@ -395,7 +395,7 @@ func FilePWrite(file *File, loop *Loop, c *FileCompletion, buf []byte, offset ui
 	cPtr := unsafe.Pointer(c)
 	bufPtr := unsafe.Pointer(&buf[0])
 	bufLen := uint64(len(buf))
-	fnFilePWrite.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &offset, &userdata, &cb)
+	fnFilePWrite.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &offset, &cb, &userdata)
 }
 
 // FilePWriteWithCallback is a convenience function for positional write.
@@ -411,7 +411,7 @@ func FileClose(file *File, loop *Loop, c *FileCompletion, userdata, cb uintptr) 
 	filePtr := unsafe.Pointer(file)
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
-	fnFileClose.Call(nil, &filePtr, &loopPtr, &cPtr, &userdata, &cb)
+	fnFileClose.Call(nil, &filePtr, &loopPtr, &cPtr, &cb, &userdata)
 }
 
 // FileCloseWithCallback is a convenience function that registers the callback and starts closing.

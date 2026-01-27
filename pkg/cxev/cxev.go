@@ -94,20 +94,24 @@ type Loop [SizeofLoop]byte
 // LoopOptions contains configuration for Loop initialization.
 // This matches xev.Options in libxev exactly in memory layout.
 //
-// Zig struct layout:
-//   entries: u32 (4 bytes) + 4 bytes padding
-//   thread_pool: ?*ThreadPool (8 bytes pointer)
+// IMPORTANT: Zig reorders struct fields by alignment, putting pointers first!
+// Zig struct actual memory layout:
+//
+//	thread_pool: ?*ThreadPool (8 bytes pointer) at offset 0
+//	entries: u32 (4 bytes) at offset 8
+//	(4 bytes padding to 16 bytes total)
 type LoopOptions struct {
+	// ThreadPool for blocking operations (epoll, kqueue backends).
+	// Set to nil if no thread pool is needed.
+	// MUST be first field to match Zig's alignment-based field ordering.
+	ThreadPool *ThreadPool
+
 	// Entries is the number of queued completions that can be in flight.
 	// Only used by io_uring backend. Default: 256
 	Entries uint32
 
-	// Padding to match Zig struct alignment (u32 followed by pointer)
+	// Padding to match Zig struct size (16 bytes total)
 	_ uint32
-
-	// ThreadPool for blocking operations (epoll, kqueue backends).
-	// Set to nil if no thread pool is needed.
-	ThreadPool *ThreadPool
 }
 
 // Completion represents a pending I/O operation or timer.
