@@ -95,7 +95,7 @@ func (s *Server) shutdownInLoop() {
 	s.clientsMu.Unlock()
 
 	for _, c := range clients {
-		c.close(true)
+		c.close()
 	}
 
 	for i := 0; i < 32; i++ {
@@ -121,7 +121,7 @@ func (s *Server) onAccept(_ *xev.TCPListener, conn *xev.TCPConn, err error) xev.
 	s.clientsMu.Unlock()
 
 	if readErr := conn.ReadFunc(s.loop, client.read, client.onRead); readErr != nil {
-		client.close(true)
+		client.close()
 	}
 	return xev.Continue
 }
@@ -155,11 +155,11 @@ func (c *clientConn) onRead(_ *xev.TCPConn, data []byte, err error) xev.Action {
 		return xev.Stop
 	}
 	if err != nil {
-		c.close(false)
+		c.close()
 		return xev.Stop
 	}
 	if len(data) == 0 {
-		c.close(false)
+		c.close()
 		return xev.Stop
 	}
 
@@ -182,7 +182,7 @@ func (c *clientConn) onRead(_ *xev.TCPConn, data []byte, err error) xev.Action {
 		wire = append(wire, encoded...)
 	}
 	if writeErr := writeAll(c.conn.Fd(), wire); writeErr != nil {
-		c.close(false)
+		c.close()
 		return xev.Stop
 	}
 	return xev.Continue
@@ -251,13 +251,13 @@ func (c *clientConn) writeSyncResponse(v redisproto.Value) xev.Action {
 		wire, _ = redisproto.Encode(redisError("ERR internal encode error"))
 	}
 	if writeErr := writeAll(c.conn.Fd(), wire); writeErr != nil {
-		c.close(false)
+		c.close()
 		return xev.Stop
 	}
 	return xev.Continue
 }
 
-func (c *clientConn) close(forceCloseFD bool) {
+func (c *clientConn) close() {
 	if c.closed {
 		return
 	}
@@ -267,9 +267,7 @@ func (c *clientConn) close(forceCloseFD bool) {
 	delete(c.server.clients, c)
 	c.server.clientsMu.Unlock()
 
-	if forceCloseFD {
-		_ = syscall.Close(int(c.conn.Fd()))
-	}
+	_ = syscall.Close(int(c.conn.Fd()))
 }
 
 func decodeCommand(frame redisproto.Value) (string, []string, error) {
