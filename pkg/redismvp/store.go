@@ -24,22 +24,18 @@ func NewStore() *Store {
 	return &Store{kv: make(map[string][]byte)}
 }
 
-// Get returns a copy of value for key.
+// Get returns value for key.
 func (s *Store) Get(key string) ([]byte, bool) {
 	s.mu.RLock()
 	v, ok := s.kv[key]
 	s.mu.RUnlock()
-	if !ok {
-		return nil, false
-	}
-	out := append([]byte(nil), v...)
-	return out, true
+	return v, ok
 }
 
-// Set stores a copy of value for key.
+// Set stores value for key.
 func (s *Store) Set(key string, value []byte) {
 	s.mu.Lock()
-	s.kv[key] = append([]byte(nil), value...)
+	s.kv[key] = value
 	s.mu.Unlock()
 }
 

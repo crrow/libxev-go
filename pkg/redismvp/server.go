@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -174,12 +175,7 @@ func (c *clientConn) onRead(_ *xev.TCPConn, data []byte, err error) xev.Action {
 
 	wire := make([]byte, 0, 128)
 	for _, frame := range frames {
-		resp := c.execute(frame)
-		encoded, encodeErr := redisproto.Encode(resp)
-		if encodeErr != nil {
-			encoded, _ = redisproto.Encode(redisError("ERR internal encode error"))
-		}
-		wire = append(wire, encoded...)
+		wire = c.appendResponse(wire, frame)
 	}
 	if writeErr := writeAll(c.conn.Fd(), wire); writeErr != nil {
 		c.close()
@@ -188,60 +184,99 @@ func (c *clientConn) onRead(_ *xev.TCPConn, data []byte, err error) xev.Action {
 	return xev.Continue
 }
 
-func (c *clientConn) execute(frame redisproto.Value) redisproto.Value {
-	name, args, err := decodeCommand(frame)
-	if err != nil {
-		return redisError("ERR Protocol error: " + err.Error())
+func (c *clientConn) appendResponse(dst []byte, frame redisproto.Value) []byte {
+	if frame.Kind != redisproto.KindArray {
+		return appendError(dst, "ERR Protocol error: command must be array")
+	}
+	if len(frame.Array) == 0 {
+		return appendError(dst, "ERR Protocol error: empty command")
 	}
 
-	switch name {
-	case "PING":
-		if len(args) == 0 {
-			return redisSimple("PONG")
+	command, ok := tokenBytes(frame.Array[0])
+	if !ok {
+		return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[0].Kind))
+	}
+
+	switch {
+	case commandIs(command, "PING"):
+		if len(frame.Array) == 1 {
+			return appendSimple(dst, "PONG")
 		}
-		if len(args) == 1 {
-			return redisBulk(args[0])
+		if len(frame.Array) == 2 {
+			arg, ok := tokenBytes(frame.Array[1])
+			if !ok {
+				return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[1].Kind))
+			}
+			return appendBulk(dst, arg)
 		}
-		return wrongArity("ping")
-	case "ECHO":
-		if len(args) != 1 {
-			return wrongArity("echo")
+		return appendWrongArity(dst, "ping")
+	case commandIs(command, "ECHO"):
+		if len(frame.Array) != 2 {
+			return appendWrongArity(dst, "echo")
 		}
-		return redisBulk(args[0])
-	case "SET":
-		if len(args) != 2 {
-			return wrongArity("set")
-		}
-		c.server.store.Set(args[0], []byte(args[1]))
-		return redisSimple("OK")
-	case "GET":
-		if len(args) != 1 {
-			return wrongArity("get")
-		}
-		v, ok := c.server.store.Get(args[0])
+		arg, ok := tokenBytes(frame.Array[1])
 		if !ok {
-			return redisNull()
+			return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[1].Kind))
 		}
-		return redisproto.Value{Kind: redisproto.KindBulkString, Bulk: v}
-	case "DEL":
-		if len(args) == 0 {
-			return wrongArity("del")
+		return appendBulk(dst, arg)
+	case commandIs(command, "SET"):
+		if len(frame.Array) != 3 {
+			return appendWrongArity(dst, "set")
 		}
-		return redisInt(c.server.store.Del(args...))
-	case "INCR":
-		if len(args) != 1 {
-			return wrongArity("incr")
+		key, ok := tokenString(frame.Array[1])
+		if !ok {
+			return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[1].Kind))
 		}
-		n, incrErr := c.server.store.Incr(args[0])
+		value, ok := tokenBytes(frame.Array[2])
+		if !ok {
+			return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[2].Kind))
+		}
+		c.server.store.Set(key, value)
+		return appendSimple(dst, "OK")
+	case commandIs(command, "GET"):
+		if len(frame.Array) != 2 {
+			return appendWrongArity(dst, "get")
+		}
+		key, ok := tokenString(frame.Array[1])
+		if !ok {
+			return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[1].Kind))
+		}
+		v, hit := c.server.store.Get(key)
+		if !hit {
+			return appendNull(dst)
+		}
+		return appendBulk(dst, v)
+	case commandIs(command, "DEL"):
+		if len(frame.Array) < 2 {
+			return appendWrongArity(dst, "del")
+		}
+		keys := make([]string, 0, len(frame.Array)-1)
+		for i := 1; i < len(frame.Array); i++ {
+			key, ok := tokenString(frame.Array[i])
+			if !ok {
+				return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[i].Kind))
+			}
+			keys = append(keys, key)
+		}
+		return appendInteger(dst, c.server.store.Del(keys...))
+	case commandIs(command, "INCR"):
+		if len(frame.Array) != 2 {
+			return appendWrongArity(dst, "incr")
+		}
+		key, ok := tokenString(frame.Array[1])
+		if !ok {
+			return appendError(dst, fmt.Sprintf("ERR Protocol error: invalid command token kind %s", frame.Array[1].Kind))
+		}
+		n, incrErr := c.server.store.Incr(key)
 		if incrErr != nil {
 			if errors.Is(incrErr, errValueNotInteger) {
-				return redisError("ERR value is not an integer or out of range")
+				return appendError(dst, "ERR value is not an integer or out of range")
 			}
-			return redisError("ERR " + incrErr.Error())
+			return appendError(dst, "ERR "+incrErr.Error())
 		}
-		return redisInt(n)
+		return appendInteger(dst, n)
 	default:
-		return redisError("ERR unknown command '" + strings.ToLower(name) + "'")
+		return appendError(dst, "ERR unknown command '"+strings.ToLower(string(command))+"'")
 	}
 }
 
@@ -270,6 +305,78 @@ func (c *clientConn) close() {
 	_ = syscall.Close(int(c.conn.Fd()))
 }
 
+func tokenBytes(v redisproto.Value) ([]byte, bool) {
+	switch v.Kind {
+	case redisproto.KindBulkString:
+		return v.Bulk, true
+	case redisproto.KindSimpleString:
+		return []byte(v.Str), true
+	default:
+		return nil, false
+	}
+}
+
+func tokenString(v redisproto.Value) (string, bool) {
+	switch v.Kind {
+	case redisproto.KindBulkString:
+		return string(v.Bulk), true
+	case redisproto.KindSimpleString:
+		return v.Str, true
+	default:
+		return "", false
+	}
+}
+
+func commandIs(token []byte, name string) bool {
+	if len(token) != len(name) {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		b := token[i]
+		if b >= 'a' && b <= 'z' {
+			b -= 'a' - 'A'
+		}
+		if b != name[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func appendSimple(dst []byte, s string) []byte {
+	dst = append(dst, '+')
+	dst = append(dst, s...)
+	return append(dst, '\r', '\n')
+}
+
+func appendError(dst []byte, s string) []byte {
+	dst = append(dst, '-')
+	dst = append(dst, s...)
+	return append(dst, '\r', '\n')
+}
+
+func appendBulk(dst, bulk []byte) []byte {
+	dst = append(dst, '$')
+	dst = strconv.AppendInt(dst, int64(len(bulk)), 10)
+	dst = append(dst, '\r', '\n')
+	dst = append(dst, bulk...)
+	return append(dst, '\r', '\n')
+}
+
+func appendNull(dst []byte) []byte {
+	return append(dst, '$', '-', '1', '\r', '\n')
+}
+
+func appendInteger(dst []byte, n int64) []byte {
+	dst = append(dst, ':')
+	dst = strconv.AppendInt(dst, n, 10)
+	return append(dst, '\r', '\n')
+}
+
+func appendWrongArity(dst []byte, cmd string) []byte {
+	return appendError(dst, "ERR wrong number of arguments for '"+cmd+"' command")
+}
+
 func decodeCommand(frame redisproto.Value) (string, []string, error) {
 	if frame.Kind != redisproto.KindArray {
 		return "", nil, errors.New("command must be array")
@@ -294,28 +401,8 @@ func decodeCommand(frame redisproto.Value) (string, []string, error) {
 	return name, parts[1:], nil
 }
 
-func wrongArity(cmd string) redisproto.Value {
-	return redisError("ERR wrong number of arguments for '" + cmd + "' command")
-}
-
-func redisSimple(s string) redisproto.Value {
-	return redisproto.Value{Kind: redisproto.KindSimpleString, Str: s}
-}
-
 func redisError(s string) redisproto.Value {
 	return redisproto.Value{Kind: redisproto.KindError, Str: s}
-}
-
-func redisBulk(s string) redisproto.Value {
-	return redisproto.Value{Kind: redisproto.KindBulkString, Bulk: []byte(s)}
-}
-
-func redisNull() redisproto.Value {
-	return redisproto.Value{Kind: redisproto.KindNull}
-}
-
-func redisInt(n int64) redisproto.Value {
-	return redisproto.Value{Kind: redisproto.KindInteger, Int: n}
 }
 
 func parseHost(addr string) string {
