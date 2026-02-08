@@ -30,9 +30,11 @@ type Server struct {
 	clientsMu sync.Mutex
 	clients   map[*clientConn]struct{}
 
-	stopCh  chan struct{}
-	doneCh  chan struct{}
-	stopped atomic.Bool
+	closeMu    sync.Mutex
+	pendingFDs []int32
+	stopCh     chan struct{}
+	doneCh     chan struct{}
+	stopped    atomic.Bool
 }
 
 // Start creates and runs a server bound to addr.
@@ -81,6 +83,7 @@ func (s *Server) run() {
 		}
 
 		_ = s.loop.Poll()
+		s.flushPendingFDs()
 		time.Sleep(50 * time.Microsecond)
 	}
 }
@@ -96,12 +99,17 @@ func (s *Server) shutdownInLoop() {
 	s.clientsMu.Unlock()
 
 	for _, c := range clients {
-		c.close()
+		c.shutdown()
 	}
 
 	for i := 0; i < 32; i++ {
 		_ = s.loop.Poll()
+		s.flushPendingFDs()
 	}
+	for _, c := range clients {
+		_ = syscall.Close(int(c.conn.Fd()))
+	}
+	s.flushPendingFDs()
 	s.loop.Close()
 }
 
@@ -302,7 +310,39 @@ func (c *clientConn) close() {
 	delete(c.server.clients, c)
 	c.server.clientsMu.Unlock()
 
-	_ = syscall.Close(int(c.conn.Fd()))
+	c.server.enqueueFD(c.conn.Fd())
+}
+
+func (c *clientConn) shutdown() {
+	if c.closed {
+		return
+	}
+	c.closed = true
+
+	c.server.clientsMu.Lock()
+	delete(c.server.clients, c)
+	c.server.clientsMu.Unlock()
+
+	_ = syscall.Shutdown(int(c.conn.Fd()), syscall.SHUT_RDWR)
+}
+
+func (s *Server) enqueueFD(fd int32) {
+	s.closeMu.Lock()
+	s.pendingFDs = append(s.pendingFDs, fd)
+	s.closeMu.Unlock()
+}
+
+func (s *Server) flushPendingFDs() {
+	s.closeMu.Lock()
+	pending := s.pendingFDs
+	if len(pending) > 0 {
+		s.pendingFDs = nil
+	}
+	s.closeMu.Unlock()
+
+	for _, fd := range pending {
+		_ = syscall.Close(int(fd))
+	}
 }
 
 func tokenBytes(v redisproto.Value) ([]byte, bool) {
