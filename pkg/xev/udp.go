@@ -239,6 +239,10 @@ func (c *UDPConn) LocalAddr() (string, uint16) {
 //
 // Return [Continue] from the handler to keep receiving, or [Stop] to stop.
 func (c *UDPConn) ReadFrom(loop *Loop, buf []byte, handler UDPReadHandler) error {
+	if len(buf) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	c.loop = loop
 	c.readHandler = handler
 	c.readBuf = buf
@@ -278,6 +282,10 @@ func (c *UDPConn) readCallback(loop *cxev.Loop, comp *cxev.UDPCompletion, remote
 //
 // The address should be in "host:port" format.
 func (c *UDPConn) WriteTo(loop *Loop, data []byte, address string, handler UDPWriteHandler) error {
+	if len(data) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	c.loop = loop
 	c.writeHandler = handler
 
@@ -308,6 +316,9 @@ func (c *UDPConn) WriteToFunc(loop *Loop, data []byte, address string, fn func(c
 func (c *UDPConn) WriteToAddr(loop *Loop, data []byte, addr *net.UDPAddr, handler UDPWriteHandler) error {
 	if addr == nil {
 		return errors.New("address is nil")
+	}
+	if len(data) == 0 {
+		return ErrEmptyBuffer
 	}
 
 	c.loop = loop

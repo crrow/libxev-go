@@ -225,9 +225,8 @@ func fileTrampoline(cif *ffi.Cif, ret unsafe.Pointer, args *unsafe.Pointer, user
 
 // fileReadContext holds the buffer pointer and length for read callbacks.
 type fileReadContext struct {
-	cb     FileReadCallback
-	buf    []byte
-	bufPtr uintptr
+	cb  FileReadCallback
+	buf []byte
 }
 
 func fileReadTrampoline(cif *ffi.Cif, ret unsafe.Pointer, args *unsafe.Pointer, userData unsafe.Pointer) uintptr {
@@ -298,7 +297,7 @@ func RegisterFileCallback(cb FileCallback) uintptr {
 // RegisterFileReadCallback registers a File read callback with its buffer.
 func RegisterFileReadCallback(cb FileReadCallback, buf []byte) uintptr {
 	id := uintptr(atomic.AddUint64(&fileCallbackCounter, 1))
-	fileReadCallbackRegistry.Store(id, fileReadContext{cb: cb, buf: buf, bufPtr: uintptr(unsafe.Pointer(&buf[0]))})
+	fileReadCallbackRegistry.Store(id, fileReadContext{cb: cb, buf: buf})
 	return id
 }
 
@@ -339,7 +338,7 @@ func FileRead(file *File, loop *Loop, c *FileCompletion, buf []byte, userdata, c
 	filePtr := unsafe.Pointer(file)
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnFileRead.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &cb, &userdata)
 }
@@ -357,7 +356,7 @@ func FileWrite(file *File, loop *Loop, c *FileCompletion, buf []byte, userdata, 
 	filePtr := unsafe.Pointer(file)
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnFileWrite.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &cb, &userdata)
 }
@@ -375,7 +374,7 @@ func FilePRead(file *File, loop *Loop, c *FileCompletion, buf []byte, offset uin
 	filePtr := unsafe.Pointer(file)
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnFilePRead.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &offset, &cb, &userdata)
 }
@@ -393,7 +392,7 @@ func FilePWrite(file *File, loop *Loop, c *FileCompletion, buf []byte, offset ui
 	filePtr := unsafe.Pointer(file)
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnFilePWrite.Call(nil, &filePtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &offset, &cb, &userdata)
 }
