@@ -429,9 +429,8 @@ func tcpAcceptTrampoline(cif *ffi.Cif, ret unsafe.Pointer, args *unsafe.Pointer,
 
 // tcpReadContext holds the buffer pointer and length for read callbacks.
 type tcpReadContext struct {
-	cb     TCPReadCallback
-	buf    []byte
-	bufPtr uintptr
+	cb  TCPReadCallback
+	buf []byte
 }
 
 func tcpReadTrampoline(cif *ffi.Cif, ret unsafe.Pointer, args *unsafe.Pointer, userData unsafe.Pointer) uintptr {
@@ -502,7 +501,7 @@ func RegisterTCPAcceptCallback(cb TCPAcceptCallback) uintptr {
 // RegisterTCPReadCallback registers a TCP read callback with its buffer.
 func RegisterTCPReadCallback(cb TCPReadCallback, buf []byte) uintptr {
 	id := uintptr(atomic.AddUint64(&tcpCallbackCounter, 1))
-	tcpReadCallbackRegistry.Store(id, tcpReadContext{cb: cb, buf: buf, bufPtr: uintptr(unsafe.Pointer(&buf[0]))})
+	tcpReadCallbackRegistry.Store(id, tcpReadContext{cb: cb, buf: buf})
 	return id
 }
 
@@ -583,7 +582,7 @@ func TCPRead(tcp *TCP, loop *Loop, c *TCPCompletion, buf []byte, userdata, cb ui
 	tcpPtr := unsafe.Pointer(tcp)
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnTCPRead.Call(nil, &tcpPtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &userdata, &cb)
 }
@@ -601,7 +600,7 @@ func TCPWrite(tcp *TCP, loop *Loop, c *TCPCompletion, buf []byte, userdata, cb u
 	tcpPtr := unsafe.Pointer(tcp)
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnTCPWrite.Call(nil, &tcpPtr, &loopPtr, &cPtr, &bufPtr, &bufLen, &userdata, &cb)
 }

@@ -379,7 +379,7 @@ func UDPRead(udp *UDP, loop *Loop, c *UDPCompletion, state *UDPState, buf []byte
 	loopPtr := unsafe.Pointer(loop)
 	cPtr := unsafe.Pointer(c)
 	statePtr := unsafe.Pointer(state)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnUDPRead.Call(nil, &udpPtr, &loopPtr, &cPtr, &statePtr, &bufPtr, &bufLen, &userdata, &cb)
 }
@@ -399,7 +399,7 @@ func UDPWrite(udp *UDP, loop *Loop, c *UDPCompletion, state *UDPState, addr *Soc
 	cPtr := unsafe.Pointer(c)
 	statePtr := unsafe.Pointer(state)
 	addrPtr := unsafe.Pointer(addr)
-	bufPtr := unsafe.Pointer(&buf[0])
+	bufPtr := bufferPointer(buf)
 	bufLen := uint64(len(buf))
 	fnUDPWrite.Call(nil, &udpPtr, &loopPtr, &cPtr, &statePtr, &addrPtr, &bufPtr, &bufLen, &userdata, &cb)
 }
