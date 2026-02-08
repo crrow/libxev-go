@@ -18,6 +18,9 @@ import (
 // variable to the path of libxev_extended.dylib/.so/.dll.
 var ErrExtLibNotLoaded = errors.New("extended library (TCP support) not loaded; set LIBXEV_EXT_PATH")
 
+// ErrEmptyBuffer is returned when an async read/write API is called with an empty buffer.
+var ErrEmptyBuffer = errors.New("buffer cannot be empty")
+
 // TCPListener accepts incoming TCP connections.
 //
 // Create a listener with [Listen], then call [TCPListener.Accept] or
@@ -350,6 +353,10 @@ func (c *TCPConn) Connect(loop *Loop, address string, handler func(conn *TCPConn
 // The provided buffer is used for the read operation. The data slice passed
 // to the handler is a slice of this buffer containing the bytes read.
 func (c *TCPConn) Read(loop *Loop, buf []byte, handler ReadHandler) error {
+	if len(buf) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	c.loop = loop
 	c.readHandler = handler
 	c.readBuf = buf
@@ -383,6 +390,10 @@ func (c *TCPConn) readCallback(loop *cxev.Loop, comp *cxev.TCPCompletion, data [
 // The handler's OnWrite method is called when the write completes. The
 // bytesWritten parameter indicates how many bytes were successfully written.
 func (c *TCPConn) Write(loop *Loop, data []byte, handler WriteHandler) error {
+	if len(data) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	c.loop = loop
 	c.writeHandler = handler
 

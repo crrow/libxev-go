@@ -234,6 +234,10 @@ func (f *File) Fd() int32 {
 // Return [Continue] from the handler to keep reading sequentially, or [Stop]
 // to stop.
 func (f *File) Read(loop *Loop, buf []byte, handler FileReadHandler) error {
+	if len(buf) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	op := &fileOp{
 		file:        f,
 		loop:        loop,
@@ -277,6 +281,10 @@ func (op *fileOp) readCallback(loop *cxev.Loop, c *cxev.FileCompletion, data []b
 //
 // The handler's OnWrite method is called when the write completes.
 func (f *File) Write(loop *Loop, data []byte, handler FileWriteHandler) error {
+	if len(data) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	op := &fileOp{
 		file:         f,
 		loop:         loop,
@@ -324,6 +332,10 @@ func (op *fileOp) writeCallback(loop *cxev.Loop, c *cxev.FileCompletion, bytesWr
 //
 // The offset is in bytes from the start of the file.
 func (f *File) PRead(loop *Loop, buf []byte, offset uint64, handler FileReadHandler) error {
+	if len(buf) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	op := &fileOp{
 		file:        f,
 		loop:        loop,
@@ -354,6 +366,10 @@ func (f *File) PReadFunc(loop *Loop, buf []byte, offset uint64, fn func(file *Fi
 //
 // The offset is in bytes from the start of the file.
 func (f *File) PWrite(loop *Loop, data []byte, offset uint64, handler FileWriteHandler) error {
+	if len(data) == 0 {
+		return ErrEmptyBuffer
+	}
+
 	op := &fileOp{
 		file:         f,
 		loop:         loop,
