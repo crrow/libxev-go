@@ -1,0 +1,79 @@
+# MIT License
+# Copyright (c) 2026 Crrow
+
+name: Redis Smoke
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  redis-smoke:
+    name: Redis MVP smoke and benchmark artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install redis-server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+
+      - name: Build native libraries
+        run: |
+          cd deps/libxev && zig build -Doptimize=ReleaseFast
+          cd ../../zig && zig build -Doptimize=ReleaseFast
+
+      - name: Set native library paths
+        run: |
+          echo "LIBXEV_PATH=$GITHUB_WORKSPACE/deps/libxev/zig-out/lib/libxev.so" >> "$GITHUB_ENV"
+          echo "LIBXEV_EXT_PATH=$GITHUB_WORKSPACE/zig/zig-out/lib/libxev_extended.so" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/deps/libxev/zig-out/lib" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/zig/zig-out/lib" >> "$GITHUB_PATH"
+
+      - name: Build Redis binaries
+        run: go build ./cmd/redis-server ./cmd/redis-cli ./cmd/redis-bench
+
+      - name: Run Redis smoke tests
+        run: |
+          go test ./pkg/redismvp ./pkg/rediscli -run 'RedisServer|RedisCLI' -count=1
+
+      - name: Run benchmark compare + report
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            REQUESTS=2000
+            CONCURRENCY=30
+          else
+            REQUESTS=400
+            CONCURRENCY=20
+          fi
+          echo "Running benchmark compare with requests=$REQUESTS concurrency=$CONCURRENCY"
+          go run ./cmd/redis-bench compare --requests "$REQUESTS" --concurrency "$CONCURRENCY"
+          go run ./cmd/redis-bench report
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis-benchmark-reports
+          path: |
+            benchmarks/reports/latest.json
+            benchmarks/reports/latest.md
+          if-no-files-found: error
