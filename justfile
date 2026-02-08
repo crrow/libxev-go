@@ -273,6 +273,22 @@ example-concurrent-copy *ARGS:
     @test -f {{ LIBXEV_EXT_PATH }} || just build-extended
     cd examples/concurrent_copy && {{ GO }} run . {{ ARGS }}
 
+[doc("run Redis MVP vs redis-server benchmark comparison")]
+[group("Examples")]
+bench-compare REQUESTS CONCURRENCY:
+    @echo "Running Redis benchmark comparison (requests={{ REQUESTS }}, concurrency={{ CONCURRENCY }})..."
+    @test -f {{ LIBXEV_PATH }} || just build-libxev
+    @test -f {{ LIBXEV_EXT_PATH }} || just build-extended
+    LIBXEV_PATH={{ LIBXEV_PATH }} LIBXEV_EXT_PATH={{ LIBXEV_EXT_PATH }} {{ GO }} run ./cmd/redis-bench compare --requests {{ REQUESTS }} --concurrency {{ CONCURRENCY }}
+    @echo "Done: comparison report generated in benchmarks/reports/"
+
+[doc("render latest Redis benchmark markdown report")]
+[group("Examples")]
+bench-report:
+    @echo "Rendering Redis benchmark markdown report..."
+    {{ GO }} run ./cmd/redis-bench report
+    @echo "Done: benchmarks/reports/latest.md updated"
+
 # ========================================================================================
 # Environment
 # ========================================================================================
