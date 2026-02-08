@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"net"
 	"testing"
+
+	"github.com/crrow/libxev-go/pkg/cxev"
 )
 
 func TestUDPBind(t *testing.T) {
@@ -128,6 +130,10 @@ func TestUDPEcho(t *testing.T) {
 
 	if !bytes.Equal(echoData, testMessage) {
 		t.Errorf("Client received echo %q, expected %q", string(echoData), string(testMessage))
+	}
+
+	if n := cxev.DebugUDPCallbackCount(); n != 0 {
+		t.Fatalf("expected no UDP callback leaks, found %d active registrations", n)
 	}
 }
 

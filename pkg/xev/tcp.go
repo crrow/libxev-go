@@ -18,6 +18,16 @@ import (
 // variable to the path of libxev_extended.dylib/.so/.dll.
 var ErrExtLibNotLoaded = errors.New("extended library (TCP support) not loaded; set LIBXEV_EXT_PATH")
 
+func unregisterTCPCallback(id uintptr, callbackID *uintptr) {
+	if id == 0 {
+		return
+	}
+	cxev.UnregisterTCPCallback(id)
+	if callbackID != nil && *callbackID == id {
+		*callbackID = 0
+	}
+}
+
 // TCPListener accepts incoming TCP connections.
 //
 // Create a listener with [Listen], then call [TCPListener.Accept] or
@@ -250,6 +260,7 @@ func (l *TCPListener) acceptCallback(loop *cxev.Loop, c *cxev.TCPCompletion, fd 
 	if action == Continue {
 		return cxev.Rearm
 	}
+	unregisterTCPCallback(userdata, &l.callbackID)
 	return cxev.Disarm
 }
 
@@ -336,6 +347,7 @@ func (c *TCPConn) Connect(loop *Loop, address string, handler func(conn *TCPConn
 		if action == Continue {
 			return cxev.Rearm
 		}
+		unregisterTCPCallback(userdata, &c.callbackID)
 		return cxev.Disarm
 	})
 
@@ -375,6 +387,7 @@ func (c *TCPConn) readCallback(loop *cxev.Loop, comp *cxev.TCPCompletion, data [
 	if action == Continue {
 		return cxev.Rearm
 	}
+	unregisterTCPCallback(userdata, &c.callbackID)
 	return cxev.Disarm
 }
 
@@ -407,6 +420,7 @@ func (c *TCPConn) writeCallback(loop *cxev.Loop, comp *cxev.TCPCompletion, bytes
 	if action == Continue {
 		return cxev.Rearm
 	}
+	unregisterTCPCallback(userdata, &c.callbackID)
 	return cxev.Disarm
 }
 
@@ -418,7 +432,7 @@ func (c *TCPConn) Close(loop *Loop, handler CloseHandler) error {
 	c.loop = loop
 	c.closeHandler = handler
 
-	cxev.TCPCloseWithCallback(&c.tcp, &loop.inner, &c.completion, func(loop *cxev.Loop, comp *cxev.TCPCompletion, result int32, userdata uintptr) cxev.CbAction {
+	c.callbackID = cxev.TCPCloseWithCallback(&c.tcp, &loop.inner, &c.completion, func(loop *cxev.Loop, comp *cxev.TCPCompletion, result int32, userdata uintptr) cxev.CbAction {
 		var err error
 		if result != 0 {
 			err = errors.New("close error")
@@ -426,6 +440,7 @@ func (c *TCPConn) Close(loop *Loop, handler CloseHandler) error {
 		if c.closeHandler != nil {
 			c.closeHandler.OnClose(c, err)
 		}
+		unregisterTCPCallback(userdata, &c.callbackID)
 		return cxev.Disarm
 	})
 	return nil
