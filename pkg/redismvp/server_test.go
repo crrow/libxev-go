@@ -109,6 +109,34 @@ func TestRedisServerConcurrentClients(t *testing.T) {
 	}
 }
 
+func TestRedisServerCloseWithActiveClients(t *testing.T) {
+	if !cxev.ExtLibLoaded() {
+		t.Skip("extended library not loaded")
+	}
+
+	srv, err := Start("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+
+	conns := make([]net.Conn, 0, 24)
+	for i := 0; i < 24; i++ {
+		conn, dialErr := net.DialTimeout("tcp", srv.Addr(), 2*time.Second)
+		if dialErr != nil {
+			t.Fatalf("dial failed: %v", dialErr)
+		}
+		conns = append(conns, conn)
+	}
+
+	if closeErr := srv.Close(); closeErr != nil {
+		t.Fatalf("server close failed: %v", closeErr)
+	}
+
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
 func TestRedisServerProtocolErrorsDeterministic(t *testing.T) {
 	if !cxev.ExtLibLoaded() {
 		t.Skip("extended library not loaded")
