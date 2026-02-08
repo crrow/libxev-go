@@ -13,6 +13,16 @@ import (
 	"github.com/crrow/libxev-go/pkg/cxev"
 )
 
+func unregisterUDPCallback(id uintptr, callbackID *uintptr) {
+	if id == 0 {
+		return
+	}
+	cxev.UnregisterUDPCallback(id)
+	if callbackID != nil && *callbackID == id {
+		*callbackID = 0
+	}
+}
+
 // UDPConn represents a UDP socket for sending and receiving datagrams.
 //
 // Unlike TCP, UDP is connectionless. Each datagram is independent and can
@@ -264,6 +274,7 @@ func (c *UDPConn) readCallback(loop *cxev.Loop, comp *cxev.UDPCompletion, remote
 	if action == Continue {
 		return cxev.Rearm
 	}
+	unregisterUDPCallback(userdata, &c.callbackID)
 	return cxev.Disarm
 }
 
@@ -343,6 +354,7 @@ func (c *UDPConn) writeCallback(loop *cxev.Loop, comp *cxev.UDPCompletion, bytes
 	if action == Continue {
 		return cxev.Rearm
 	}
+	unregisterUDPCallback(userdata, &c.callbackID)
 	return cxev.Disarm
 }
 
@@ -354,7 +366,7 @@ func (c *UDPConn) Close(loop *Loop, handler UDPCloseHandler) error {
 	c.loop = loop
 	c.closeHandler = handler
 
-	cxev.UDPCloseWithCallback(&c.udp, &loop.inner, &c.completion, func(loop *cxev.Loop, comp *cxev.UDPCompletion, result int32, userdata uintptr) cxev.CbAction {
+	c.callbackID = cxev.UDPCloseWithCallback(&c.udp, &loop.inner, &c.completion, func(loop *cxev.Loop, comp *cxev.UDPCompletion, result int32, userdata uintptr) cxev.CbAction {
 		var err error
 		if result != 0 {
 			err = errors.New("close error")
@@ -362,6 +374,7 @@ func (c *UDPConn) Close(loop *Loop, handler UDPCloseHandler) error {
 		if c.closeHandler != nil {
 			c.closeHandler.OnClose(c, err)
 		}
+		unregisterUDPCallback(userdata, &c.callbackID)
 		return cxev.Disarm
 	})
 	return nil

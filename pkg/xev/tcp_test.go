@@ -115,6 +115,10 @@ func TestTCPEchoServer(t *testing.T) {
 		loop.RunOnce()
 	}
 
+	for i := 0; i < 50; i++ {
+		loop.Poll()
+	}
+
 	if !serverDone {
 		t.Error("server did not complete")
 	}
@@ -123,6 +127,9 @@ func TestTCPEchoServer(t *testing.T) {
 	}
 	if echoedData != "hello" {
 		t.Errorf("expected 'hello', got '%s'", echoedData)
+	}
+	if n := cxev.DebugTCPCallbackCount(); n != 0 {
+		t.Fatalf("expected no TCP callback leaks, found %d active registrations", n)
 	}
 }
 
